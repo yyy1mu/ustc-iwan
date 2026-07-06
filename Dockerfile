@@ -33,13 +33,11 @@ RUN set -eux; \
     mkdir -p /out; \
     cp "target/${rust_target}/release/iwan-client-oidc" /out/iwan-client-oidc
 
-FROM debian:bookworm-slim AS proxy-builder
+FROM alpine:3.22 AS proxy-builder
 
 ARG THREEPROXY_VERSION=0.9.5
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl gcc libc6-dev make \
-    && rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache build-base ca-certificates curl linux-headers
 
 WORKDIR /src
 RUN curl -fsSL "https://github.com/3proxy/3proxy/archive/refs/tags/${THREEPROXY_VERSION}.tar.gz" -o /tmp/3proxy.tar.gz \
@@ -48,11 +46,9 @@ RUN curl -fsSL "https://github.com/3proxy/3proxy/archive/refs/tags/${THREEPROXY_
     && mkdir -p /out \
     && cp bin/3proxy /out/3proxy
 
-FROM debian:bookworm-slim AS runtime
+FROM alpine:3.22 AS runtime
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl iproute2 \
-    && rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache ca-certificates curl iproute2
 
 COPY --from=builder /out/iwan-client-oidc /usr/local/bin/iwan-client-oidc
 COPY --from=proxy-builder /out/3proxy /usr/local/bin/3proxy
