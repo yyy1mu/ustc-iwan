@@ -186,27 +186,6 @@ sudo ./iwan-client proxy \
   --proxy-ip 1.1.1.1,2.2.2.2
 ```
 
-## GitHub Release 为什么不在代码列表里
-
-GitHub Actions 构建出来的二进制不会自动提交到仓库根目录，也不会出现在 Code 页面的文件列表中。
-
-这个项目的 workflow 只监听 tag push：
-
-```yaml
-on:
-  push:
-    tags: ['v*']
-```
-
-推送 `v*` tag 后，Actions 会构建所有 matrix 目标，并把 zip 文件上传到 GitHub Releases 的对应 tag 页面。
-
-如果 Releases 页面没有看到文件，先检查：
-
-- 这个 tag 是否真的 push 到 GitHub。
-- Actions 是否被仓库启用。
-- 对应 tag 的 workflow run 是否成功。
-- Release job 是否因为某个 matrix 构建失败而没有执行。
-
 ## 从源码构建
 
 本机构建：
