@@ -161,6 +161,73 @@ sudo ./iwan-client-oidc --connect --proxy-cidr 0.0.0.0/0
 
 必须指定 `--fetch`、`--list`、`--connect`、`--all` 中的至少一个动作。
 
+## Docker 代理模式
+
+用于把 `iwan-client-oidc` 封装成宿主机可用的本地代理镜像，暴露给宿主机的代理端口为：
+
+- SOCKS5：`127.0.0.1:1080`
+- HTTP：`127.0.0.1:8888`
+
+容器内会先建立 iWAN TUN 隧道，再启动 [3proxy](https://github.com/3proxy/3proxy)。宿主机本地代理端口后，代理进程的出站流量会走容器内的 iWAN 隧道。
+
+构建镜像：
+
+```bash
+docker build -f Dockerfile -t ustc-iwan-client-oidc .
+# 或 docker compose build
+```
+
+启动代理：
+
+```bash
+docker run -it \
+  --name ustc-iwan \
+  --restart unless-stopped \
+  --cap-add NET_ADMIN \
+  --device /dev/net/tun \
+  --sysctl net.ipv6.conf.all.disable_ipv6=1 \
+  --sysctl net.ipv6.conf.default.disable_ipv6=1 \
+  --sysctl net.ipv6.conf.lo.disable_ipv6=1 \
+  -p 127.0.0.1:1080:1080 \
+  -p 127.0.0.1:8888:8888 \
+  -v "$PWD/data/iwan:/config" \
+  ustc-iwan-client-oidc
+```
+
+如果 `/config/servers.json` 不存在，容器会先输出 OIDC 登录链接。按前文流程在同一交互式命令行完成浏览器认证后，把回调 URL 粘贴回终端。随后容器会列出线路，选择一次后会保存该线路编号。配置会保存到宿主机的：
+
+```text
+./data/iwan/servers.json
+```
+
+线路选择会保存到：
+
+```text
+./data/iwan/server_index
+```
+
+后续启动或重启会直接复用已保存的登录配置和线路选择：
+
+```bash
+docker start ustc-iwan
+docker restart ustc-iwan
+```
+
+测试宿主机访问测试：
+
+```bash
+curl --proxy socks5h://127.0.0.1:1080 https://api.llm.ustc.edu.cn
+curl --proxy http://127.0.0.1:8888 https://api.llm.ustc.edu.cn
+```
+
+排查日志：
+
+```bash
+docker logs ustc-iwan
+```
+
+默认禁用 IPv6，避免 TUN 刚启动时产生 IPv6 链路本地流量影响 iWAN 数据面。端口只绑定到 `127.0.0.1`，不会暴露到局域网。
+
 ## 手动客户端
 
 `iwan-client` 不使用 OIDC，需要手动提供服务器、用户名和密码。

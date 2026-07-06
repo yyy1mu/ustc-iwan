@@ -48,12 +48,35 @@ pub fn run_pump(
     let running = Arc::new(AtomicBool::new(true));
     let sock_send = sock.try_clone().context("clone send socket")?;
     let sock_recv = sock.try_clone().context("clone recv socket")?;
+    let sock_keepalive = sock.try_clone().context("clone keepalive socket")?;
     sock_recv
         .set_read_timeout(Some(Duration::from_millis(300)))
         .ok();
 
     let xk_send = xk.to_vec();
     let xk_recv = xk.to_vec();
+
+    let rk = running.clone();
+    let tk = std::thread::spawn(move || {
+        println!("[KEEPALIVE] started");
+        let h = protocol::pkhdr(protocol::PT_DATA_ENC, enc, sid, tok);
+        let pkt = protocol::data_pkt(&h, &[]);
+        loop {
+            if sock_keepalive.send(&pkt).is_err() {
+                eprintln!("[KEEPALIVE] send failed");
+                rk.store(false, Ordering::Relaxed);
+                break;
+            }
+            for _ in 0..100 {
+                if !rk.load(Ordering::Relaxed) {
+                    println!("[KEEPALIVE] stopped");
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            }
+        }
+        println!("[KEEPALIVE] stopped");
+    });
 
     let r1 = running.clone();
     let t1 = std::thread::spawn(move || {
@@ -110,6 +133,8 @@ pub fn run_pump(
                         eprintln!("[UDP→TUN] server sent CLOSE");
                         r2.store(false, Ordering::Relaxed);
                         break;
+                    } else if t == protocol::PT_PING_RSP && protocol::verify_sig(&buf[..n]) {
+                        // Keepalive response; the data plane only needs it to keep NAT/session state fresh.
                     }
                 }
                 Ok(_) => {}
@@ -135,6 +160,7 @@ pub fn run_pump(
     while running.load(Ordering::Relaxed) {
         std::thread::sleep(Duration::from_millis(200));
     }
+    tk.join().ok();
     t1.join().ok();
     t2.join().ok();
 

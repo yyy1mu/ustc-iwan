@@ -1,7 +1,10 @@
-**/target/
+target/
+.git/
+.github/
 data/
-*.apk
+doc/
 *.zip
+*.apk
 *.o
 *.d
 CACHEDIR.TAG
