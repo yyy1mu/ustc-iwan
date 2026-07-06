@@ -1,29 +1,31 @@
 # ustc-iwan
 
-USTC iWAN 的 Linux 命令行客户端。
+USTC iWAN 的 Linux 命令行客户端，用于通过统一身份认证获取线路配置，并按需建立 TUN 隧道。
 
-这个仓库主要解决两件事：
+主要功能：
 
-- 使用统一身份认证获取 iWAN 线路配置，并在本机保存。
-- 选择一条线路建立 Linux TUN 隧道，按需把指定 IP、域名或网段路由进隧道。
+- 通过 OIDC 登录获取 iWAN 线路配置。
+- 将线路配置保存到本机，后续可直接离线查看线路列表。
+- 选择线路建立 Linux TUN 隧道。
+- 按 IP、域名或 CIDR 精确控制哪些流量进入隧道。
 
-项目包含三个二进制：
+仓库包含三个二进制：
 
 | 二进制 | 用途 |
 |--------|------|
-| `iwan-client-oidc` | 推荐入口。通过 OIDC 拉取 USTC iWAN 配置、列出线路、选择线路并连接。 |
-| `iwan-client` | 手动指定服务器、用户名和密码连接，主要用于调试。 |
-| `iwan-server` | 自建兼容测试服务端。普通使用者一般不需要。 |
+| `iwan-client-oidc` | 推荐使用。负责登录、保存线路配置、选择线路并连接。 |
+| `iwan-client` | 手动指定服务器、用户名和密码，适合调试或自定义接入。 |
+| `iwan-server` | 自建兼容测试服务端，普通用户通常不需要。 |
 
 ## 系统要求
 
 - Linux。
-- 连接时需要 root 权限，或给程序授予 `CAP_NET_ADMIN`。
 - 系统需要 `/dev/net/tun`。
+- 连接时需要 root 权限，或为程序授予 `CAP_NET_ADMIN`。
 
 ## 下载
 
-到 GitHub Releases 页面下载对应架构的二进制。
+从 GitHub Releases 下载对应架构的二进制。
 
 常用文件：
 
@@ -38,7 +40,7 @@ USTC iWAN 的 Linux 命令行客户端。
 chmod +x iwan-client-oidc-*
 ```
 
-如果你是从源码构建，二进制会在：
+源码构建产物位于：
 
 ```text
 target/<target>/release/
@@ -46,29 +48,29 @@ target/<target>/release/
 
 ## OIDC 使用流程
 
-### 1. 拉取配置
+### 1. 获取线路配置
 
 ```bash
 ./iwan-client-oidc --fetch
 ```
 
-程序会输出登录链接。用浏览器打开后，把跳转回来的 `com.panabit.mobile://...` URL 粘贴回终端。
+命令会输出登录链接。用浏览器打开链接并完成认证后，将回调 URL 粘贴回终端。
 
-浏览器可能会提示打开 `iWAN.app`。这里点取消，留在浏览器页面：
+如果浏览器提示打开 `iWAN.app`，选择取消，保留在当前网页：
 
 ![取消打开 iWAN.app](doc/oidc-cancel-app-dialog.png)
 
-然后在页面按钮上复制链接地址，把复制到的 `com.panabit.mobile://...` 回调 URL 粘贴回终端：
+随后在页面按钮上复制链接地址，将复制到的 `com.panabit.mobile://...` 回调 URL 粘贴回终端：
 
 ![复制回调链接](doc/oidc-copy-redirect-url.png)
 
-成功后会保存：
+配置保存位置：
 
 ```text
 ~/.config/iwan/servers.json
 ```
 
-这个文件包含线路地址、用户名和加密后的密码。`--list` 不会解密密码。
+配置文件包含线路地址、用户名和加密后的线路密码。`--list` 只读取线路信息，不解密密码。
 
 ### 2. 列出本地线路
 
@@ -85,7 +87,7 @@ target/<target>/release/
  4. 移动线路                           <server-ip>:6001
 ```
 
-如果本地没有配置文件，会报错并提示先执行 `--fetch`。
+如果配置文件不存在，命令会提示先执行 `--fetch`。
 
 ### 3. 连接
 
@@ -93,7 +95,7 @@ target/<target>/release/
 sudo ./iwan-client-oidc --connect
 ```
 
-程序会读取本地配置，列出线路，让你输入序号。选择后只解密这一条线路的密码，并建立 TUN 隧道。
+命令会读取本地配置并显示线路列表。输入序号后，只解密所选线路的密码，并建立 TUN 隧道。
 
 配置用普通用户执行 `--fetch` 保存即可。连接时即使使用 `sudo`，也不需要把配置文件复制到 root 用户目录。
 
@@ -103,7 +105,7 @@ sudo ./iwan-client-oidc --connect
 sudo ./iwan-client-oidc --all
 ```
 
-等价于：
+该命令依次完成：
 
 ```text
 --fetch -> --list -> --connect
@@ -111,9 +113,9 @@ sudo ./iwan-client-oidc --all
 
 ## 路由规则
 
-默认连接只创建并配置 `iwan0`，不会劫持任何业务流量。
+默认连接只创建并配置 `iwan0`，不会修改业务流量路由。
 
-要让指定目标走 iWAN，需要显式传参数：
+需要让指定目标走 iWAN 时，显式传入代理规则：
 
 ```bash
 sudo ./iwan-client-oidc --connect \
@@ -126,48 +128,48 @@ sudo ./iwan-client-oidc --connect \
 
 | 参数 | 说明 |
 |------|------|
-| `--proxy-ip` | 指定 IPv4 地址。程序会自动转成 `/32` 路由。 |
-| `--proxy-domain` | 连接前解析域名，把解析出的 IPv4 地址加入路由。 |
+| `--proxy-ip` | 指定 IPv4 地址，自动转换为 `/32` 路由。 |
+| `--proxy-domain` | 连接前解析域名，并把解析得到的 IPv4 地址加入路由。 |
 | `--proxy-cidr` | 指定 CIDR 网段，例如 `10.0.0.0/8` 或 `0.0.0.0/0`。 |
 | `--tun` | TUN 设备名，默认 `iwan0`。 |
 | `--encrypt` | 协议加密模式，默认 `1`。 |
 
-这些参数可以重复，也可以用逗号分隔：
+代理参数可以重复，也可以用逗号分隔：
 
 ```bash
 --proxy-ip 1.1.1.1,2.2.2.2
 --proxy-ip 1.1.1.1 --proxy-ip 2.2.2.2
 ```
 
-全流量走 iWAN：
+将全部流量路由到 iWAN：
 
 ```bash
 sudo ./iwan-client-oidc --connect --proxy-cidr 0.0.0.0/0
 ```
 
-注意：域名只在连接时解析一次。域名后续 DNS 变化不会自动更新路由。
+注意：域名只在连接时解析一次。连接后域名解析变化不会自动同步到路由表。
 
 ## OIDC 命令参数
 
 | 参数 | 行为 |
 |------|------|
 | `--fetch` | 通过 OIDC 登录并保存线路配置。 |
-| `--list` | 只读取本地配置并列出线路，不联网，不解密密码。 |
+| `--list` | 读取本地配置并列出线路，不联网，不解密密码。 |
 | `--connect` | 只读取本地配置，选择线路并连接。 |
 | `--all` | 拉配置、列线路、选择并连接。 |
 | `--config-dir <DIR>` | 指定配置目录，默认 `~/.config/iwan`。 |
 
-不带 `--fetch`、`--list`、`--connect`、`--all` 中任意一个会直接报错。
+必须指定 `--fetch`、`--list`、`--connect`、`--all` 中的至少一个动作。
 
 ## 手动客户端
 
-`iwan-client` 不走 OIDC，需要你自己提供服务器、用户名和密码。
+`iwan-client` 不使用 OIDC，需要手动提供服务器、用户名和密码。
 
 ```bash
 ./iwan-client ping --server <SERVER_IP> --port 6001
 ```
 
-只测试认证：
+仅测试认证：
 
 ```bash
 ./iwan-client auth \
@@ -190,7 +192,7 @@ sudo ./iwan-client proxy \
 
 ## 从源码构建
 
-本机构建：
+本地构建：
 
 ```bash
 cargo build --release --bin iwan-client-oidc
@@ -206,7 +208,7 @@ rustup target add aarch64-unknown-linux-musl
 cargo zigbuild --bin iwan-client-oidc --target aarch64-unknown-linux-musl --release
 ```
 
-GNU 目标可指定 glibc 版本：
+GNU 目标可以指定 glibc 版本：
 
 ```bash
 cargo zigbuild --bin iwan-client --target x86_64-unknown-linux-gnu.2.17 --release
@@ -215,7 +217,7 @@ cargo zigbuild --bin iwan-client --target aarch64-unknown-linux-gnu.2.17 --relea
 
 ## 服务端
 
-`iwan-server` 用于自建测试，不是连接 USTC iWAN 的必要组件。
+`iwan-server` 用于自建测试环境。连接 USTC iWAN 不需要运行服务端。
 
 ```bash
 sudo ./iwan-server \
@@ -234,19 +236,12 @@ sudo ./iwan-server \
 username:password
 ```
 
-服务端所在机器需要开启转发和 NAT：
+服务端所在机器需要开启 IPv4 转发和 NAT：
 
 ```bash
 echo 1 | sudo tee /proc/sys/net/ipv4/ip_forward
 sudo iptables -t nat -A POSTROUTING -s 198.18.0.0/16 -o eth0 -j MASQUERADE
 ```
-
-## 安全说明
-
-- `servers.json` 中保存的是加密后的线路密码。
-- `--list` 不会解密密码。
-- `--connect` 只在内存中解密用户选择的线路密码。
-- 不建议把配置文件提交到公开仓库。
 
 ## 免责声明
 
