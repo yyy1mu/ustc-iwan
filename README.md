@@ -54,6 +54,14 @@ target/<target>/release/
 
 程序会输出登录链接。用浏览器打开后，把跳转回来的 `com.panabit.mobile://...` URL 粘贴回终端。
 
+浏览器可能会提示打开 `iWAN.app`。这里点取消，留在浏览器页面：
+
+![取消打开 iWAN.app](doc/oidc-cancel-app-dialog.png)
+
+然后在页面按钮上复制链接地址，把复制到的 `com.panabit.mobile://...` 回调 URL 粘贴回终端：
+
+![复制回调链接](doc/oidc-copy-redirect-url.png)
+
 成功后会保存：
 
 ```text
