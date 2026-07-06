@@ -1,0 +1,113 @@
+name: Build
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ── iwan-client ──────────────────────────────
+          - { binary: iwan-client, target: x86_64-unknown-linux-gnu,   suffix: x86_64-gnu }
+          - { binary: iwan-client, target: x86_64-unknown-linux-musl,  suffix: x86_64-musl }
+          - { binary: iwan-client, target: aarch64-unknown-linux-gnu,  suffix: aarch64-gnu }
+          - { binary: iwan-client, target: aarch64-unknown-linux-musl, suffix: aarch64-musl }
+          - { binary: iwan-client, target: armv7-unknown-linux-gnueabihf, suffix: armv7-gnu }
+          - { binary: iwan-client, target: armv7-unknown-linux-musleabihf, suffix: armv7-musl }
+          - { binary: iwan-client, target: riscv64gc-unknown-linux-musl, suffix: riscv64-musl }
+          # ── iwan-client-oidc ───────────────────────
+          - { binary: iwan-client-oidc, target: x86_64-unknown-linux-gnu,   suffix: x86_64-gnu }
+          - { binary: iwan-client-oidc, target: x86_64-unknown-linux-musl,  suffix: x86_64-musl }
+          - { binary: iwan-client-oidc, target: aarch64-unknown-linux-gnu,  suffix: aarch64-gnu }
+          - { binary: iwan-client-oidc, target: aarch64-unknown-linux-musl, suffix: aarch64-musl }
+          - { binary: iwan-client-oidc, target: armv7-unknown-linux-gnueabihf, suffix: armv7-gnu }
+          - { binary: iwan-client-oidc, target: armv7-unknown-linux-musleabihf, suffix: armv7-musl }
+          - { binary: iwan-client-oidc, target: riscv64gc-unknown-linux-musl, suffix: riscv64-musl }
+          # ── iwan-server ──────────────────────────
+          - { binary: iwan-server, target: x86_64-unknown-linux-gnu,   suffix: x86_64-gnu }
+          - { binary: iwan-server, target: x86_64-unknown-linux-musl,  suffix: x86_64-musl }
+          - { binary: iwan-server, target: aarch64-unknown-linux-gnu,  suffix: aarch64-gnu }
+          - { binary: iwan-server, target: aarch64-unknown-linux-musl, suffix: aarch64-musl }
+          - { binary: iwan-server, target: armv7-unknown-linux-gnueabihf, suffix: armv7-gnu }
+          - { binary: iwan-server, target: armv7-unknown-linux-musleabihf, suffix: armv7-musl }
+          - { binary: iwan-server, target: riscv64gc-unknown-linux-musl, suffix: riscv64-musl }
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Zig
+        run: |
+          curl -fsSL https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz -o zig.tar.xz
+          tar -xf zig.tar.xz
+          echo "$PWD/zig-linux-x86_64-0.13.0" >> "$GITHUB_PATH"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cargo-zigbuild
+        run: cargo install cargo-zigbuild
+
+      - name: Build ${{ matrix.binary }} (${{ matrix.target }})
+        run: |
+          # x86_64/aarch64 gnu → pin glibc 2.17; others → let zig pick
+          case "${{ matrix.target }}" in
+            x86_64-unknown-linux-gnu|aarch64-unknown-linux-gnu)
+              TARG="${{ matrix.target }}.2.17" ;;
+            *)
+              TARG="${{ matrix.target }}" ;;
+          esac
+          cargo zigbuild --bin "${{ matrix.binary }}" --target "$TARG" --release
+          mkdir -p "$GITHUB_WORKSPACE/release"
+          dest="$GITHUB_WORKSPACE/release/${{ matrix.binary }}-${{ matrix.suffix }}"
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "$dest"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.binary }}-${{ matrix.suffix }}
+          path: release/${{ matrix.binary }}-${{ matrix.suffix }}
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: release
+
+      - name: Zip each binary individually
+        run: |
+          cd release
+          for dir in */; do
+            name="${dir%/}"
+            file=$(find "$dir" -type f | head -1)
+            zip -j "${name}.zip" "$file"
+          done
+          find . -maxdepth 1 -type d ! -name . -exec rm -rf {} +
+          ls -la
+
+      - name: Delete existing release (if any)
+        run: gh release delete "${{ github.ref_name }}" --yes 2>/dev/null || true
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: release/*.zip
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

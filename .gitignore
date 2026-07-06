@@ -1,0 +1,8 @@
+**/target/
+*.apk
+*.zip
+*.o
+*.d
+CACHEDIR.TAG
+.cargo-lock
+.rustc_info.json
