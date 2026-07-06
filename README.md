@@ -95,13 +95,7 @@ sudo ./iwan-client-oidc --connect
 
 程序会读取本地配置，列出线路，让你输入序号。选择后只解密这一条线路的密码，并建立 TUN 隧道。
 
-`sudo` 下默认仍会读取发起 sudo 用户的配置，例如：
-
-```text
-/home/x/.config/iwan/servers.json
-```
-
-不会改读 `/root/.config/iwan/servers.json`。
+配置用普通用户执行 `--fetch` 保存即可。连接时即使使用 `sudo`，也不需要把配置文件复制到 root 用户目录。
 
 ### 4. 一次完成
 
