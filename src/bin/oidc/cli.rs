@@ -52,7 +52,6 @@ pub struct Cli {
     pub encrypt: u8,
 
     /// Use a rootless userspace SOCKS5 proxy instead of a TUN device.
-    #[cfg(target_os = "linux")]
     #[arg(long)]
     pub socks: bool,
 

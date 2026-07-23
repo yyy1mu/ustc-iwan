@@ -1,6 +1,5 @@
 use super::{crypto, protocol};
 use anyhow::{Context, Result};
-use std::io::Read;
 use std::time::Duration;
 
 pub struct AuthResult {
@@ -89,9 +88,7 @@ pub fn udp_connect(host: &str, port: u16, timeout_ms: u64) -> Result<std::net::U
 }
 
 pub fn rand_u32() -> Result<u32> {
-    let mut b = [0u8; 4];
-    std::fs::File::open("/dev/urandom")?.read_exact(&mut b)?;
-    Ok(u32::from_le_bytes(b))
+    Ok(rand::random())
 }
 
 pub fn get_ct(user: &str, pass: &str, ct_pass_hex: &Option<String>) -> [u8; 16] {

@@ -117,20 +117,20 @@ Linux：
 ./iwan-client-oidc --connect --socks
 ```
 
-macOS（仅支持 SOCKS5，无需也不接受 `--socks`）：
+macOS（仅支持 SOCKS5）：
 
 ```bash
-./iwan-client-oidc-macos-aarch64 --connect \
+./iwan-client-oidc-macos-aarch64 --connect --socks \
   --socks-listen 127.0.0.1:1080 \
   --socks-mtu 1380
 ```
 
 Intel Mac 请将文件名替换为 `iwan-client-oidc-macos-x86_64`。
 
-Windows PowerShell（仅支持 SOCKS5，无需也不接受 `--socks`）：
+Windows PowerShell（仅支持 SOCKS5）：
 
 ```powershell
-.\iwan-client-oidc-windows-x86_64.exe --connect `
+.\iwan-client-oidc-windows-x86_64.exe --connect --socks `
   --socks-listen 127.0.0.1:1080 `
   --socks-mtu 1380
 ```
@@ -138,7 +138,8 @@ Windows PowerShell（仅支持 SOCKS5，无需也不接受 `--socks`）：
 Windows ARM64 请将文件名替换为
 `iwan-client-oidc-windows-aarch64.exe`。
 
-默认监听 `127.0.0.1:1080`，默认用户态内层 MTU 为 `1380`。Linux 也可以通过
+三个平台均使用 `--socks` 显式启用 SOCKS5 模式。默认监听
+`127.0.0.1:1080`，默认用户态内层 MTU 为 `1380`，可以通过
 `--socks-listen` 和 `--socks-mtu` 修改这两个值。
 
 当前 SOCKS5 模式支持 `CONNECT`、IPv4 地址目标和域名目标。域名由客户端

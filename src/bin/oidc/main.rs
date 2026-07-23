@@ -23,9 +23,12 @@ fn main() -> Result<()> {
     let do_fetch = cli.fetch || cli.all;
     let do_list = cli.list || cli.all;
     let do_connect = cli.connect || cli.all;
-    #[cfg(target_os = "linux")]
     if cli.socks && !do_connect {
         anyhow::bail!("--socks requires --connect or --all");
+    }
+    #[cfg(not(target_os = "linux"))]
+    if do_connect && !cli.socks {
+        anyhow::bail!("--socks is required for --connect or --all on this platform");
     }
 
     let config = if do_fetch {
@@ -236,14 +239,8 @@ fn connect_server(cli: &cli::Cli, config: &LocalConfig) -> Result<()> {
     unreachable!("non-Linux builds always use SOCKS5")
 }
 
-#[cfg(target_os = "linux")]
 fn socks_mode(cli: &cli::Cli) -> bool {
     cli.socks
-}
-
-#[cfg(not(target_os = "linux"))]
-fn socks_mode(_cli: &cli::Cli) -> bool {
-    true
 }
 
 #[cfg(target_os = "linux")]
@@ -293,6 +290,22 @@ fn resolve_dir(dir: &str) -> PathBuf {
 }
 
 fn default_home() -> PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(home) = std::env::var_os("USERPROFILE").filter(|value| !value.is_empty()) {
+            return PathBuf::from(home);
+        }
+        if let (Some(drive), Some(path)) = (
+            std::env::var_os("HOMEDRIVE").filter(|value| !value.is_empty()),
+            std::env::var_os("HOMEPATH").filter(|value| !value.is_empty()),
+        ) {
+            let mut home = PathBuf::from(drive);
+            home.push(path);
+            return home;
+        }
+    }
+
+    #[cfg(target_os = "linux")]
     if let Ok(sudo_user) = std::env::var("SUDO_USER") {
         if !sudo_user.is_empty() && sudo_user != "root" {
             if let Some(home) = passwd_home(&sudo_user) {
@@ -301,9 +314,15 @@ fn default_home() -> PathBuf {
             return PathBuf::from(format!("/home/{sudo_user}"));
         }
     }
-    PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/tmp".into()))
+
+    std::env::var_os("HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."))
 }
 
+#[cfg(target_os = "linux")]
 fn passwd_home(user: &str) -> Option<PathBuf> {
     let output = std::process::Command::new("getent")
         .args(["passwd", user])
