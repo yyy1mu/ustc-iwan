@@ -299,7 +299,10 @@ fn service_local_inputs(
             Ok(n) => {
                 if let Some(handle) = flow.socket {
                     let socket = sockets.get_mut::<tcp::Socket>(handle);
-                    debug_assert_eq!(socket.send_slice(&buf[..n]).ok(), Some(n));
+                    let sent = socket.send_slice(&buf[..n]).unwrap_or(0);
+                    if sent < n {
+                        flow.input.extend_from_slice(&buf[sent..n]);
+                    }
                 }
             }
             Err(e) if e.kind() == ErrorKind::WouldBlock => {}
