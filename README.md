@@ -111,17 +111,35 @@ sudo ./iwan-client-oidc --connect
 
 ### 无 TUN 的 SOCKS5 模式
 
+Linux：
+
 ```bash
 ./iwan-client-oidc --connect --socks
 ```
 
-默认监听 `127.0.0.1:1080`，可以指定监听地址和用户态内层 MTU：
+macOS（仅支持 SOCKS5，无需也不接受 `--socks`）：
 
 ```bash
-./iwan-client-oidc --connect --socks \
+./iwan-client-oidc-macos-aarch64 --connect \
   --socks-listen 127.0.0.1:1080 \
   --socks-mtu 1380
 ```
+
+Intel Mac 请将文件名替换为 `iwan-client-oidc-macos-x86_64`。
+
+Windows PowerShell（仅支持 SOCKS5，无需也不接受 `--socks`）：
+
+```powershell
+.\iwan-client-oidc-windows-x86_64.exe --connect `
+  --socks-listen 127.0.0.1:1080 `
+  --socks-mtu 1380
+```
+
+Windows ARM64 请将文件名替换为
+`iwan-client-oidc-windows-aarch64.exe`。
+
+默认监听 `127.0.0.1:1080`，默认用户态内层 MTU 为 `1380`。Linux 也可以通过
+`--socks-listen` 和 `--socks-mtu` 修改这两个值。
 
 当前 SOCKS5 模式支持 `CONNECT`、IPv4 地址目标和域名目标。域名由客户端
 通过固定的 `114.114.114.114:53` 在本机解析为 IPv4 地址，例如：
