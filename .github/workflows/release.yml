@@ -77,8 +77,70 @@ jobs:
           name: ${{ matrix.binary }}-${{ matrix.suffix }}
           path: release/${{ matrix.binary }}-${{ matrix.suffix }}
 
+  build-desktop:
+    name: Build ${{ matrix.binary }} for ${{ matrix.platform }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS links Rust dependencies statically. Apple system libraries remain dynamic.
+          - { binary: iwan-client, runner: macos-15-intel, target: x86_64-apple-darwin, platform: macos, arch: x86_64, extension: '' }
+          - { binary: iwan-client-oidc, runner: macos-15-intel, target: x86_64-apple-darwin, platform: macos, arch: x86_64, extension: '' }
+          - { binary: iwan-client, runner: macos-15, target: aarch64-apple-darwin, platform: macos, arch: aarch64, extension: '' }
+          - { binary: iwan-client-oidc, runner: macos-15, target: aarch64-apple-darwin, platform: macos, arch: aarch64, extension: '' }
+
+          # MSVC builds use a statically linked C runtime.
+          - { binary: iwan-client, runner: windows-2025, target: x86_64-pc-windows-msvc, platform: windows, arch: x86_64, extension: '.exe' }
+          - { binary: iwan-client-oidc, runner: windows-2025, target: x86_64-pc-windows-msvc, platform: windows, arch: x86_64, extension: '.exe' }
+          - { binary: iwan-client, runner: windows-11-arm, target: aarch64-pc-windows-msvc, platform: windows, arch: aarch64, extension: '.exe' }
+          - { binary: iwan-client-oidc, runner: windows-11-arm, target: aarch64-pc-windows-msvc, platform: windows, arch: aarch64, extension: '.exe' }
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build macOS binary
+        if: matrix.platform == 'macos'
+        env:
+          RUSTFLAGS: -C strip=symbols
+        run: |
+          cargo build --locked --release --bin "${{ matrix.binary }}" --target "${{ matrix.target }}"
+          mkdir -p release
+          output="${{ matrix.binary }}-${{ matrix.platform }}-${{ matrix.arch }}${{ matrix.extension }}"
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}${{ matrix.extension }}" "release/$output"
+          file "release/$output"
+          otool -L "release/$output"
+
+      - name: Build Windows binary with static CRT
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        env:
+          RUSTFLAGS: -C target-feature=+crt-static -C strip=symbols
+        run: |
+          cargo build --locked --release --bin "${{ matrix.binary }}" --target "${{ matrix.target }}"
+          New-Item -ItemType Directory -Force release | Out-Null
+          $output = "${{ matrix.binary }}-${{ matrix.platform }}-${{ matrix.arch }}${{ matrix.extension }}"
+          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary }}${{ matrix.extension }}" "release/$output"
+          $dependencies = (dumpbin /dependents "release/$output" | Out-String)
+          $dependencies
+          if ($dependencies -match '(?i)VCRUNTIME|MSVCP|ucrtbase') {
+            throw "Windows C runtime was linked dynamically"
+          }
+
+      - name: Upload desktop artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.binary }}-${{ matrix.platform }}-${{ matrix.arch }}
+          path: release/${{ matrix.binary }}-${{ matrix.platform }}-${{ matrix.arch }}${{ matrix.extension }}
+
   release:
-    needs: build
+    needs: [build, build-desktop]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     steps:

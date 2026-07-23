@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 
-/// iWAN SD-WAN client — ping, authenticate, or proxy traffic over the tunnel.
+/// iWAN client — ping, authenticate, or run a SOCKS5 proxy.
 #[derive(Parser)]
 #[command(name = "iwan-client", version)]
 pub struct Cli {
@@ -15,7 +15,10 @@ pub enum Command {
     /// Perform authentication handshake only (debug / credential check).
     Auth(AuthArgs),
     /// Open a TUN tunnel and proxy traffic through the VPN server.
+    #[cfg(target_os = "linux")]
     Proxy(ProxyArgs),
+    /// Run a rootless SOCKS5 proxy using a userspace TCP/IP stack.
+    Socks(SocksArgs),
 }
 
 #[derive(Parser)]
@@ -44,6 +47,7 @@ pub struct AuthArgs {
     pub mtu: u16,
 }
 
+#[cfg(target_os = "linux")]
 #[derive(Parser)]
 pub struct ProxyArgs {
     #[arg(long)]
@@ -68,4 +72,25 @@ pub struct ProxyArgs {
     pub proxy_ip: Vec<String>,
     #[arg(long, value_delimiter = ',')]
     pub proxy_domain: Vec<String>,
+}
+
+#[derive(Parser)]
+pub struct SocksArgs {
+    #[arg(long)]
+    pub server: String,
+    #[arg(long, default_value = "6001")]
+    pub port: u16,
+    #[arg(long, default_value = "_rev_m_1")]
+    pub user: String,
+    #[arg(long, default_value = "h#wJN0#Jy^uq-C@")]
+    pub pass: String,
+    #[arg(long)]
+    pub ct_pass: Option<String>,
+    #[arg(long, default_value = "1")]
+    pub encrypt: u8,
+    #[arg(long, default_value = "1380")]
+    pub mtu: u16,
+    /// Local SOCKS5 listen address.
+    #[arg(long, default_value = "127.0.0.1:1080")]
+    pub listen: std::net::SocketAddr,
 }

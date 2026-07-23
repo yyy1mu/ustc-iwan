@@ -1,16 +1,28 @@
+#[cfg(target_os = "linux")]
 mod cli;
+#[cfg(target_os = "linux")]
 mod handler;
+#[cfg(target_os = "linux")]
 mod session;
 
+#[cfg(target_os = "linux")]
 use anyhow::{Context, Result};
+#[cfg(target_os = "linux")]
 use clap::Parser;
+#[cfg(target_os = "linux")]
 use iwan::core::{protocol, tun};
+#[cfg(target_os = "linux")]
 use std::collections::HashMap;
+#[cfg(target_os = "linux")]
 use std::net::UdpSocket;
+#[cfg(target_os = "linux")]
 use std::process::Command;
+#[cfg(target_os = "linux")]
 use std::sync::{Arc, Mutex};
+#[cfg(target_os = "linux")]
 use std::time::Duration;
 
+#[cfg(target_os = "linux")]
 fn main() -> Result<()> {
     let cli = cli::Cli::parse();
 
@@ -91,6 +103,13 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+#[cfg(not(target_os = "linux"))]
+fn main() {
+    eprintln!("iwan-server is only supported on Linux");
+    std::process::exit(1);
+}
+
+#[cfg(target_os = "linux")]
 fn load_users(path: &str) -> Result<HashMap<String, String>> {
     let content = std::fs::read_to_string(path).context("read users file")?;
     let mut m = HashMap::new();
@@ -107,6 +126,7 @@ fn load_users(path: &str) -> Result<HashMap<String, String>> {
     Ok(m)
 }
 
+#[cfg(target_os = "linux")]
 fn setup_nat(subnet: &str, nat_if: &str) {
     let _ = Command::new("iptables")
         .args([
@@ -143,6 +163,7 @@ fn setup_nat(subnet: &str, nat_if: &str) {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn configure_tun(cli: &cli::Cli) {
     use iwan::core::util::ip_run;
     let _ = ip_run(&["addr", "flush", "dev", &cli.tun]);
