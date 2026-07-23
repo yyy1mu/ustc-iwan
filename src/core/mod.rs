@@ -1,8 +1,13 @@
 pub mod auth;
 pub mod crypto;
 pub mod gcm;
+pub(crate) mod netstack;
 pub mod protocol;
+#[cfg(target_os = "linux")]
 pub mod proxy;
+#[cfg(target_os = "linux")]
 pub mod route;
+pub mod socks;
+#[cfg(target_os = "linux")]
 pub mod tun;
 pub mod util;

@@ -4,7 +4,9 @@ mod oidc;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use iwan::core::{auth, crypto, gcm, proxy, tun};
+use iwan::core::{auth, crypto, gcm};
+#[cfg(target_os = "linux")]
+use iwan::core::{proxy, tun};
 use std::io::{self, Write};
 use std::path::PathBuf;
 
@@ -21,6 +23,10 @@ fn main() -> Result<()> {
     let do_fetch = cli.fetch || cli.all;
     let do_list = cli.list || cli.all;
     let do_connect = cli.connect || cli.all;
+    #[cfg(target_os = "linux")]
+    if cli.socks && !do_connect {
+        anyhow::bail!("--socks requires --connect or --all");
+    }
 
     let config = if do_fetch {
         let config = fetch_config()?;
@@ -161,11 +167,6 @@ fn connect_server(cli: &cli::Cli, config: &LocalConfig) -> Result<()> {
     let password = gcm::decrypt_password(encrypted_pw, APP_SECRET, &config.domain, srv_user);
     eprintln!("\n  Connecting to {name} ({host}:{port})...");
 
-    let _ = iwan::core::util::ip_run(&["link", "del", &cli.tun]);
-    let tun_fd = tun::open_tun(&cli.tun).context("open tun (must be root or CAP_NET_ADMIN)")?;
-    tun::set_nonblock(tun_fd);
-    eprintln!("  tun {} fd={}", cli.tun, tun_fd);
-
     let ct = auth::get_ct(srv_user, &password, &None);
     let nonce = auth::rand_u32()?;
     let open = auth::build_open(srv_user, &ct, 1400, cli.encrypt, nonce);
@@ -199,32 +200,88 @@ fn connect_server(cli: &cli::Cli, config: &LocalConfig) -> Result<()> {
 
     let sk = crypto::session_key(srv_user, &password);
     let xk: Vec<u8> = sk[..8].to_vec();
-    let route_targets = route_targets(cli);
 
-    proxy::run_pump(
-        tun_fd,
-        &cli.tun,
-        &sock,
-        &xk,
-        auth_result.sid,
-        auth_result.tok,
-        cli.encrypt,
-        host,
-        &route_targets,
-        &auth_result.tun,
-        auth_result.mtu,
-    )?;
+    if socks_mode(cli) {
+        return run_socks(cli, &sock, &xk, &auth_result);
+    }
 
-    tun::tun_close(tun_fd);
-    Ok(())
+    #[cfg(target_os = "linux")]
+    {
+        let _ = iwan::core::util::ip_run(&["link", "del", &cli.tun]);
+        let tun_fd = tun::open_tun(&cli.tun).context("open tun (must be root or CAP_NET_ADMIN)")?;
+        tun::set_nonblock(tun_fd);
+        eprintln!("  tun {} fd={}", cli.tun, tun_fd);
+
+        let route_targets = route_targets(cli);
+
+        proxy::run_pump(
+            tun_fd,
+            &cli.tun,
+            &sock,
+            &xk,
+            auth_result.sid,
+            auth_result.tok,
+            cli.encrypt,
+            host,
+            &route_targets,
+            &auth_result.tun,
+            auth_result.mtu,
+        )?;
+
+        tun::tun_close(tun_fd);
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    unreachable!("non-Linux builds always use SOCKS5")
 }
 
+#[cfg(target_os = "linux")]
+fn socks_mode(cli: &cli::Cli) -> bool {
+    cli.socks
+}
+
+#[cfg(not(target_os = "linux"))]
+fn socks_mode(_cli: &cli::Cli) -> bool {
+    true
+}
+
+#[cfg(target_os = "linux")]
 fn route_targets(cli: &cli::Cli) -> Vec<String> {
     let mut targets = Vec::new();
     targets.extend(cli.proxy_cidr.iter().cloned());
     targets.extend(cli.proxy_ip.iter().cloned());
     targets.extend(cli.proxy_domain.iter().cloned());
     targets
+}
+
+fn run_socks(
+    cli: &cli::Cli,
+    sock: &std::net::UdpSocket,
+    xor_key: &[u8],
+    auth_result: &auth::AuthResult,
+) -> Result<()> {
+    let inner_ip = auth_result
+        .tun
+        .parse()
+        .context("server returned invalid tunnel IPv4 address")?;
+    let gateway = auth_result
+        .gw
+        .parse()
+        .context("server returned invalid gateway IPv4 address")?;
+    iwan::core::socks::run(
+        sock,
+        iwan::core::socks::SocksConfig {
+            listen: cli.socks_listen,
+            inner_ip,
+            gateway,
+            mtu: usize::from(auth_result.mtu.min(cli.socks_mtu)),
+            xor_key,
+            sid: auth_result.sid,
+            token: auth_result.tok,
+            encryption: cli.encrypt,
+        },
+    )
 }
 
 fn resolve_dir(dir: &str) -> PathBuf {

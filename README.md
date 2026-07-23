@@ -1,6 +1,7 @@
 # ustc-iwan
 
-USTC iWAN 的 Linux 命令行客户端，用于通过统一身份认证获取线路配置，并按需建立 TUN 隧道。
+USTC iWAN 命令行客户端，用于通过统一身份认证获取线路配置，并通过 SOCKS5
+代理或 Linux TUN 隧道连接。
 
 主要功能：
 
@@ -17,11 +18,16 @@ USTC iWAN 的 Linux 命令行客户端，用于通过统一身份认证获取线
 | `iwan-client` | 手动指定服务器、用户名和密码，适合调试或自定义接入。 |
 | `iwan-server` | 自建兼容测试服务端，普通用户通常不需要。 |
 
+两个客户端均支持无 TUN 的 SOCKS5 模式。该模式由 smoltcp 在用户态生成完整
+TCP/IPv4 数据包，不创建网卡、不修改系统路由，也不需要 root 或
+`CAP_NET_ADMIN`。
+
 ## 系统要求
 
-- Linux。
-- 系统需要 `/dev/net/tun`。
-- 连接时需要 root 权限，或为程序授予 `CAP_NET_ADMIN`。
+- TUN 模式仅支持 Linux，需要 `/dev/net/tun`。
+- TUN 模式连接时需要 root 权限，或为程序授予 `CAP_NET_ADMIN`。
+- SOCKS5 模式支持 Linux、macOS 和 Windows，不创建 TUN，不需要上述权限。
+- macOS 和 Windows 版本只包含 SOCKS5 模式。
 
 ## 下载
 
@@ -33,6 +39,10 @@ USTC iWAN 的 Linux 命令行客户端，用于通过统一身份认证获取线
 - `iwan-client-oidc-x86_64-musl`
 - `iwan-client-aarch64-musl`
 - `iwan-client-x86_64-musl`
+- `iwan-client-oidc-macos-aarch64`
+- `iwan-client-oidc-macos-x86_64`
+- `iwan-client-oidc-windows-aarch64.exe`
+- `iwan-client-oidc-windows-x86_64.exe`
 
 下载后加执行权限：
 
@@ -98,6 +108,30 @@ sudo ./iwan-client-oidc --connect
 命令会读取本地配置并显示线路列表。输入序号后，只解密所选线路的密码，并建立 TUN 隧道。
 
 配置用普通用户执行 `--fetch` 保存即可。连接时即使使用 `sudo`，也不需要把配置文件复制到 root 用户目录。
+
+### 无 TUN 的 SOCKS5 模式
+
+```bash
+./iwan-client-oidc --connect --socks
+```
+
+默认监听 `127.0.0.1:1080`，可以指定监听地址和用户态内层 MTU：
+
+```bash
+./iwan-client-oidc --connect --socks \
+  --socks-listen 127.0.0.1:1080 \
+  --socks-mtu 1380
+```
+
+当前 SOCKS5 模式支持 `CONNECT`、IPv4 地址目标和域名目标。域名由客户端
+通过固定的 `114.114.114.114:53` 在本机解析为 IPv4 地址，例如：
+
+```bash
+curl --socks5-hostname 127.0.0.1:1080 https://www.example.com/
+```
+
+不支持 IPv6、SOCKS5 `BIND` 或 `UDP ASSOCIATE`。这些请求会收到对应的
+SOCKS5 错误响应。
 
 ### 4. 一次完成
 
@@ -188,6 +222,17 @@ sudo ./iwan-client proxy \
   --user <USER> \
   --pass '<PASSWORD>' \
   --proxy-ip 1.1.1.1,2.2.2.2
+```
+
+不创建 TUN，启动用户态 SOCKS5 代理：
+
+```bash
+./iwan-client socks \
+  --server <SERVER_IP> \
+  --port 6001 \
+  --user <USER> \
+  --pass '<PASSWORD>' \
+  --listen 127.0.0.1:1080
 ```
 
 ## 从源码构建
