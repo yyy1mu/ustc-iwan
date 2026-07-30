@@ -65,7 +65,9 @@ fn fetch_config() -> Result<LocalConfig> {
         rand::thread_rng().fill_bytes(&mut b);
         crypto::hex(&b)
     };
-    eprintln!("  device_id = {device_id}");
+    if iwan::core::util::debug_enabled() {
+        eprintln!("  device_id={device_id}");
+    }
 
     let dev_body = serde_json::json!({
         "domain": DOMAIN, "type": "android", "oem_name": "panabit",
@@ -73,8 +75,7 @@ fn fetch_config() -> Result<LocalConfig> {
         "serverlist_version": "0", "ipfilter_version": "0", "branding_version": "0",
     });
 
-    // ② /m/auth
-    eprint!("  /m/auth... ");
+    eprint!("  Registering device... ");
     io::stdout().flush().ok();
     let (st, resp) = controller::post(&agent, "/m/auth", &dev_body, &kp_token)?;
     if st != 200 {
@@ -82,16 +83,14 @@ fn fetch_config() -> Result<LocalConfig> {
     }
     eprintln!("OK");
 
-    // ③ /m/keepalive
-    eprint!("  /m/keepalive... ");
-    io::stdout().flush().ok();
     let mut kp_body = dev_body.clone();
     kp_body["type"] = serde_json::Value::String("keepalive".into());
     let (st, _) = controller::post(&agent, "/m/keepalive", &kp_body, &kp_token)?;
-    eprintln!("HTTP {st}");
+    if st != 200 {
+        anyhow::bail!("keepalive failed HTTP {st}");
+    }
 
-    // ④ /m/config
-    eprint!("  /m/config... ");
+    eprint!("  Fetching server config... ");
     io::stdout().flush().ok();
     let (st, resp) = controller::post(&agent, "/m/config", &dev_body, &kp_token)?;
     if st != 200 {
@@ -179,7 +178,9 @@ fn connect_server(cli: &cli::Cli, config: &LocalConfig) -> Result<()> {
         let mut result = None;
         for i in 0u32..=3 {
             sock.send(&open)?;
-            eprintln!("  [{i}] -> OPEN");
+            if iwan::core::util::debug_enabled() {
+                eprintln!("  auth attempt {}", i + 1);
+            }
             let mut buf = [0u8; 4096];
             match sock.recv(&mut buf) {
                 Ok(m) => match auth::parse_ack(&buf[..m], nonce) {
@@ -210,10 +211,12 @@ fn connect_server(cli: &cli::Cli, config: &LocalConfig) -> Result<()> {
 
     #[cfg(target_os = "linux")]
     {
-        let _ = iwan::core::util::ip_run(&["link", "del", &cli.tun]);
+        let _ = iwan::core::util::ip_run_quiet(&["link", "del", &cli.tun]);
         let tun_fd = tun::open_tun(&cli.tun).context("open tun (must be root or CAP_NET_ADMIN)")?;
         tun::set_nonblock(tun_fd);
-        eprintln!("  tun {} fd={}", cli.tun, tun_fd);
+        if iwan::core::util::debug_enabled() {
+            eprintln!("  tun {} fd={}", cli.tun, tun_fd);
+        }
 
         let route_targets = route_targets(cli);
 

@@ -23,7 +23,9 @@ pub fn run_pump(
     auth_mtu: u16,
 ) -> Result<()> {
     let (ogw, odev) = route::capture_default().context("cannot detect default route")?;
-    println!("orig: via {ogw} dev {odev}");
+    if super::util::debug_enabled() {
+        eprintln!("default route: via {ogw} dev {odev}");
+    }
 
     let routes = expand_route_targets(route_targets)?;
     if !routes.is_empty() {
@@ -36,8 +38,15 @@ pub fn run_pump(
             &odev,
             &routes,
         );
-        for route in &routes {
-            println!("route {route} -> dev {tun_name}");
+        println!(
+            "TUN {tun_name} ready: {} route{}",
+            routes.len(),
+            if routes.len() == 1 { "" } else { "s" }
+        );
+        if super::util::debug_enabled() {
+            for route in &routes {
+                eprintln!("route {route} -> dev {tun_name}");
+            }
         }
     } else {
         let _ = super::util::ip_run(&["addr", "flush", "dev", tun_name]);
@@ -60,7 +69,9 @@ pub fn run_pump(
     let r1 = running.clone();
     let t1 = std::thread::spawn(move || {
         let mut buf = vec![0u8; 2048];
-        println!("[TUN→UDP] started");
+        if super::util::debug_enabled() {
+            eprintln!("[TUN→UDP] started");
+        }
         loop {
             if !r1.load(Ordering::Relaxed) {
                 break;
@@ -89,7 +100,9 @@ pub fn run_pump(
                 break;
             }
         }
-        println!("[TUN→UDP] stopped");
+        if super::util::debug_enabled() {
+            eprintln!("[TUN→UDP] stopped");
+        }
     });
 
     let r2 = running.clone();
@@ -98,7 +111,9 @@ pub fn run_pump(
         let mut last_keepalive = Instant::now()
             .checked_sub(KEEPALIVE_INTERVAL)
             .unwrap_or_else(Instant::now);
-        println!("[UDP→TUN] started");
+        if super::util::debug_enabled() {
+            eprintln!("[UDP→TUN] started");
+        }
         loop {
             if !r2.load(Ordering::Relaxed) {
                 break;
@@ -142,7 +157,9 @@ pub fn run_pump(
                 }
             }
         }
-        println!("[UDP→TUN] stopped");
+        if super::util::debug_enabled() {
+            eprintln!("[UDP→TUN] stopped");
+        }
     });
 
     let rr = running.clone();
@@ -152,7 +169,7 @@ pub fn run_pump(
     })
     .context("set SIGINT handler")?;
 
-    println!("\nproxy running — press Ctrl-C to stop");
+    println!("TUN proxy running — press Ctrl-C to stop");
     while running.load(Ordering::Relaxed) {
         std::thread::sleep(Duration::from_millis(200));
     }
@@ -168,7 +185,9 @@ pub fn run_pump(
 
     let c = protocol::pkhdr(protocol::PT_CLOSE, enc, sid, tok);
     let _ = sock.send(&protocol::ctrl_pkt(&c, &[]));
-    println!("-> CLOSE sent");
+    if super::util::debug_enabled() {
+        eprintln!("CLOSE sent");
+    }
     Ok(())
 }
 

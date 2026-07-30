@@ -110,6 +110,9 @@ fn validate_inner_ipv4(packet: &[u8], mtu: usize) -> bool {
 }
 
 fn log_tcp_packet(direction: &str, packet: &[u8]) {
+    if !crate::core::util::debug_enabled() {
+        return;
+    }
     if packet.len() < 40 || packet[0] >> 4 != 4 || packet[9] != 6 {
         return;
     }

@@ -47,7 +47,7 @@ pub fn run(args: &cli::ProxyArgs, nonce: u32, open: Vec<u8>) -> Result<()> {
     let xk: Vec<u8> = sk[..8].to_vec();
     let route_targets = route_targets(args);
 
-    let _ = iwan::core::util::ip_run(&["link", "del", &args.tun]);
+    let _ = iwan::core::util::ip_run_quiet(&["link", "del", &args.tun]);
     let tun_fd = tun::open_tun(&args.tun).context("open tun (must be root)")?;
     tun::set_nonblock(tun_fd);
     println!("tun {} fd={}", args.tun, tun_fd);
