@@ -51,6 +51,11 @@ pub fn handle_udp(
                 send_pong(sock, addr);
             }
         }
+        protocol::PT_ECHO_REQ => {
+            if protocol::verify_sig(raw) {
+                send_echo_response(sock, addr, raw);
+            }
+        }
         _ => {}
     }
 }
@@ -146,6 +151,13 @@ fn send_reject(sock: &UdpSocket, addr: SocketAddr, msg: &str) {
 
 fn send_pong(sock: &UdpSocket, addr: SocketAddr) {
     let h = protocol::pkhdr(protocol::PT_PING_RSP, 0, 0xFFFF, 0xFFFF_FFFF);
+    sock.send_to(&protocol::ctrl_pkt(&h, &[]), addr).ok();
+}
+
+fn send_echo_response(sock: &UdpSocket, addr: SocketAddr, raw: &[u8]) {
+    let sid = u16::from_be_bytes([raw[2], raw[3]]);
+    let token = u32::from_be_bytes([raw[4], raw[5], raw[6], raw[7]]);
+    let h = protocol::pkhdr(protocol::PT_ECHO_RES, raw[1], sid, token);
     sock.send_to(&protocol::ctrl_pkt(&h, &[]), addr).ok();
 }
 

@@ -40,8 +40,8 @@ pub(crate) fn receive_vpn(
                         crypto::hex(&buf[8..n])
                     );
                 }
-                if packet_type == protocol::PT_PING_REQ {
-                    let header = protocol::pkhdr(protocol::PT_PING_RSP, encryption, sid, token);
+                if packet_type == protocol::PT_ECHO_REQ {
+                    let header = protocol::pkhdr(protocol::PT_ECHO_RES, encryption, sid, token);
                     sock.send(&protocol::ctrl_pkt(&header, &[]))
                         .context("send VPN keepalive response")?;
                     continue;
@@ -75,7 +75,7 @@ pub(crate) fn send_vpn_keepalive(
     if last_keepalive.elapsed() < VPN_KEEPALIVE_INTERVAL {
         return Ok(());
     }
-    let header = protocol::pkhdr(protocol::PT_PING_REQ, encryption, sid, token);
+    let header = protocol::pkhdr(protocol::PT_ECHO_REQ, encryption, sid, token);
     sock.send(&protocol::ctrl_pkt(&header, &[]))
         .context("send VPN keepalive")?;
     *last_keepalive = Instant::now();
