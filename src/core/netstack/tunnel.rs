@@ -6,7 +6,7 @@ use std::io::ErrorKind;
 use std::net::{Ipv4Addr, UdpSocket};
 use std::time::{Duration, Instant};
 
-pub(crate) const VPN_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
+pub(crate) const VPN_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(20);
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn receive_vpn(
@@ -75,9 +75,18 @@ pub(crate) fn send_vpn_keepalive(
     if last_keepalive.elapsed() < VPN_KEEPALIVE_INTERVAL {
         return Ok(());
     }
-    let header = protocol::pkhdr(protocol::PT_PING_REQ, encryption, sid, token);
-    sock.send(&protocol::ctrl_pkt(&header, &[]))
-        .context("send VPN keepalive")?;
+    // Send an empty data frame so the keepalive is associated with
+    // the authenticated sid/token data session.
+    let packet_type = if encryption == 0 {
+        protocol::PT_DATA
+    } else {
+        protocol::PT_DATA_ENC
+    };
+
+    let header = protocol::pkhdr(packet_type, encryption, sid, token);
+    sock.send(&protocol::data_pkt(&header, &[]))
+        .context("send VPN session keepalive")?;
+
     *last_keepalive = Instant::now();
     Ok(())
 }
