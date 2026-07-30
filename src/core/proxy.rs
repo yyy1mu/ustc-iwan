@@ -4,7 +4,9 @@ use std::net::{ToSocketAddrs, UdpSocket};
 use std::os::fd::RawFd;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
 
 /// Run the TUN↔UDP data-plane pump. Blocks until Ctrl-C or error.
 pub fn run_pump(
@@ -93,10 +95,22 @@ pub fn run_pump(
     let r2 = running.clone();
     let t2 = std::thread::spawn(move || {
         let mut buf = vec![0u8; 65535];
+        let mut last_keepalive = Instant::now()
+            .checked_sub(KEEPALIVE_INTERVAL)
+            .unwrap_or_else(Instant::now);
         println!("[UDP→TUN] started");
         loop {
             if !r2.load(Ordering::Relaxed) {
                 break;
+            }
+            if last_keepalive.elapsed() >= KEEPALIVE_INTERVAL {
+                let h = protocol::pkhdr(protocol::PT_ECHO_REQ, enc, sid, tok);
+                if let Err(e) = sock_recv.send(&protocol::ctrl_pkt(&h, &[])) {
+                    eprintln!("[UDP→TUN] keepalive send err: {e}");
+                    r2.store(false, Ordering::Relaxed);
+                    break;
+                }
+                last_keepalive = Instant::now();
             }
             match sock_recv.recv(&mut buf) {
                 Ok(n) if n >= 8 => {
@@ -110,6 +124,13 @@ pub fn run_pump(
                         eprintln!("[UDP→TUN] server sent CLOSE");
                         r2.store(false, Ordering::Relaxed);
                         break;
+                    } else if t == protocol::PT_ECHO_REQ {
+                        let h = protocol::pkhdr(protocol::PT_ECHO_RES, enc, sid, tok);
+                        if let Err(e) = sock_recv.send(&protocol::ctrl_pkt(&h, &[])) {
+                            eprintln!("[UDP→TUN] keepalive response err: {e}");
+                            r2.store(false, Ordering::Relaxed);
+                            break;
+                        }
                     }
                 }
                 Ok(_) => {}
