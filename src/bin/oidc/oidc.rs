@@ -65,7 +65,7 @@ pub fn run(agent: &ureq::Agent) -> Result<(String, String)> {
         })
         .unwrap_or_else(|| "unknown".into());
 
-    eprintln!("  OK  {username}  |  {:.50}...", kp);
+    eprintln!("  Authenticated as {username}");
     Ok((kp, username))
 }
 

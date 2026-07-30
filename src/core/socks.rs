@@ -2,7 +2,7 @@ use super::netstack::{
     receive_vpn, send_vpn, send_vpn_keepalive, spawn_ipv4_query, DnsResult, IpTunnelDevice,
     DNS_SERVER, VPN_KEEPALIVE_INTERVAL,
 };
-use super::protocol;
+use super::{protocol, util};
 use anyhow::{Context, Result};
 use smoltcp::iface::{Config, Interface, SocketHandle, SocketSet};
 use smoltcp::socket::tcp;
@@ -117,10 +117,12 @@ pub fn run(sock: &UdpSocket, config: SocksConfig<'_>) -> Result<()> {
         .context("set SIGINT handler")?;
 
     println!("SOCKS5 listening on {}", config.listen);
-    println!(
-        "userspace IP {}, gateway {}, MTU {}",
-        config.inner_ip, config.gateway, config.mtu
-    );
+    if util::debug_enabled() {
+        eprintln!(
+            "SOCKS5 network: IP {}, gateway {}, MTU {}",
+            config.inner_ip, config.gateway, config.mtu
+        );
+    }
 
     while running.load(Ordering::Relaxed) {
         send_vpn_keepalive(
@@ -217,7 +219,9 @@ fn accept_connections(
                 let id = *next_flow;
                 *next_flow = next_flow.wrapping_add(1);
                 flows.insert(id, LocalFlow::new(stream)?);
-                println!("[flow {id}] local client {peer}");
+                if util::debug_enabled() {
+                    eprintln!("[flow {id}] local client {peer}");
+                }
             }
             Err(e) if e.kind() == ErrorKind::WouldBlock => return Ok(()),
             Err(e) => return Err(e).context("accept SOCKS5 client"),
@@ -437,7 +441,9 @@ fn open_tcp_connection(
             flow.socket = Some(handle);
             flow.local_port = local_port;
             flow.set_state(LocalState::Connecting);
-            println!("[flow {id}] {inner_ip}:{local_port} -> {remote}:{remote_port}");
+            if util::debug_enabled() {
+                eprintln!("[flow {id}] {inner_ip}:{local_port} -> {remote}:{remote_port}");
+            }
         }
         Err(_) => queue_socks_error(flow, 1),
     }
@@ -462,10 +468,12 @@ fn handle_dns_results(
         }
         match answer.result {
             Ok(remote) => {
-                println!(
-                    "[flow {}] DNS {} -> {}",
-                    answer.flow_id, answer.domain, remote
-                );
+                if util::debug_enabled() {
+                    eprintln!(
+                        "[flow {}] DNS {} -> {}",
+                        answer.flow_id, answer.domain, remote
+                    );
+                }
                 open_tcp_connection(
                     answer.flow_id,
                     flow,
@@ -521,7 +529,9 @@ fn update_tcp_states(
                 reply.extend_from_slice(&flow.local_port.to_be_bytes());
                 flow.queue(&reply);
                 flow.set_state(LocalState::Established);
-                println!("[flow {id}] TCP established");
+                if util::debug_enabled() {
+                    eprintln!("[flow {id}] TCP established");
+                }
             }
             LocalState::Connecting
                 if matches!(
@@ -624,7 +634,9 @@ fn reap_flows(
                 sockets.remove(handle);
             }
         }
-        println!("[flow {id}] closed");
+        if util::debug_enabled() {
+            eprintln!("[flow {id}] closed");
+        }
     }
 }
 

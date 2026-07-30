@@ -35,7 +35,7 @@ fn main() -> Result<()> {
     println!("ip_forward=1");
     setup_nat(&cli.subnet, &cli.nat_if);
 
-    let _ = iwan::core::util::ip_run(&["link", "del", &cli.tun]);
+    let _ = iwan::core::util::ip_run_quiet(&["link", "del", &cli.tun]);
     let tun_fd = tun::open_tun(&cli.tun).context("open tun")?;
     tun::set_nonblock(tun_fd);
     println!("tun {} fd={}", cli.tun, tun_fd);
