@@ -1,3 +1,5 @@
+
+
 # ustc-iwan
 
 USTC iWAN 命令行客户端，用于通过统一身份认证获取线路配置，并通过 SOCKS5
@@ -47,7 +49,7 @@ TCP/IPv4 数据包，不创建网卡、不修改系统路由，也不需要 root
 下载后加执行权限：
 
 ```bash
-chmod +x iwan-client-oidc-*
+chmod +x iwan-*
 ```
 
 源码构建产物位于：
