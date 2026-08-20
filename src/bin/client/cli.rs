@@ -93,4 +93,7 @@ pub struct SocksArgs {
     /// Local SOCKS5 listen address.
     #[arg(long, default_value = "127.0.0.1:1080")]
     pub listen: std::net::SocketAddr,
+    /// DNS resolver for domain requests: ip[:port], tls://host[:port] or https://url.
+    #[arg(long, default_value = "114.114.114.114:53")]
+    pub dns: String,
 }

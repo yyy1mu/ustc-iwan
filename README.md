@@ -107,6 +107,14 @@ sudo ./iwan-client-oidc --connect
 
 命令会读取本地配置并显示线路列表。输入序号后，只解密所选线路的密码，并建立 TUN 隧道。
 
+也可以用 `--server` 跳过交互选择，适合脚本或 systemd 无人值守启动：
+
+```bash
+sudo ./iwan-client-oidc --connect --server 电信
+```
+
+`--server` 接受线路序号（如 `2`）或线路名称中的关键字（如 `电信`）。
+
 配置用普通用户执行 `--fetch` 保存即可。连接时即使使用 `sudo`，也不需要把配置文件复制到 root 用户目录。
 
 ### 无 TUN 的 SOCKS5 模式
@@ -143,7 +151,19 @@ Windows ARM64 请将文件名替换为
 `--socks-listen` 和 `--socks-mtu` 修改这两个值。
 
 当前 SOCKS5 模式支持 `CONNECT`、IPv4 地址目标和域名目标。域名由客户端
-通过固定的 `114.114.114.114:53` 在本机解析为 IPv4 地址，例如：
+在本机解析为 IPv4 地址，默认使用 `114.114.114.114:53`，可以通过
+`--dns` 指定其他解析器：
+
+```text
+--dns 223.5.5.5              # 普通 UDP（可带端口：223.5.5.5:5353）
+--dns tls://dns.alidns.com   # DNS over TLS（默认端口 853）
+--dns https://dns.alidns.com/dns-query   # DNS over HTTPS
+```
+
+当本机 DNS 被代理工具接管（如 TUN + fake-ip）时，建议改用 DoT 或 DoH，
+避免解析到假地址。
+
+使用示例：
 
 ```bash
 curl --socks5-hostname 127.0.0.1:1080 https://www.example.com/

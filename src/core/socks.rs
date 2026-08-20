@@ -1,6 +1,6 @@
 use super::netstack::{
     receive_vpn, send_vpn, send_vpn_keepalive, spawn_ipv4_query, DnsResult, IpTunnelDevice,
-    DNS_SERVER, VPN_KEEPALIVE_INTERVAL,
+    VPN_KEEPALIVE_INTERVAL,
 };
 use super::{protocol, util};
 use anyhow::{Context, Result};
@@ -15,6 +15,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::time::{Duration, Instant as StdInstant, SystemTime, UNIX_EPOCH};
+
+pub use super::netstack::dns::{DnsResolver, DEFAULT_DNS};
 
 const TCP_BUFFER_SIZE: usize = 256 * 1024;
 const LOCAL_WRITE_LIMIT: usize = 256 * 1024;
@@ -79,6 +81,7 @@ pub struct SocksConfig<'a> {
     pub sid: u16,
     pub token: u32,
     pub encryption: u8,
+    pub dns: DnsResolver,
 }
 
 pub fn run(sock: &UdpSocket, config: SocksConfig<'_>) -> Result<()> {
@@ -119,8 +122,8 @@ pub fn run(sock: &UdpSocket, config: SocksConfig<'_>) -> Result<()> {
     println!("SOCKS5 listening on {}", config.listen);
     if util::debug_enabled() {
         eprintln!(
-            "SOCKS5 network: IP {}, gateway {}, MTU {}",
-            config.inner_ip, config.gateway, config.mtu
+            "SOCKS5 network: IP {}, gateway {}, MTU {}, DNS {}",
+            config.inner_ip, config.gateway, config.mtu, config.dns
         );
     }
 
@@ -148,6 +151,7 @@ pub fn run(sock: &UdpSocket, config: SocksConfig<'_>) -> Result<()> {
             &mut sockets,
             &mut iface,
             config.inner_ip,
+            &config.dns,
             &mut next_port,
             &mut allocated_ports,
             &dns_tx,
@@ -158,6 +162,7 @@ pub fn run(sock: &UdpSocket, config: SocksConfig<'_>) -> Result<()> {
             &mut sockets,
             &mut iface,
             config.inner_ip,
+            &config.dns,
             &mut next_port,
             &mut allocated_ports,
         );
@@ -229,11 +234,13 @@ fn accept_connections(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn service_local_inputs(
     flows: &mut HashMap<u64, LocalFlow>,
     sockets: &mut SocketSet<'_>,
     iface: &mut Interface,
     inner_ip: Ipv4Addr,
+    dns: &DnsResolver,
     next_port: &mut u16,
     allocated_ports: &mut HashSet<u16>,
     dns_tx: &Sender<DnsResult>,
@@ -295,6 +302,7 @@ fn service_local_inputs(
                     sockets,
                     iface,
                     inner_ip,
+                    dns,
                     next_port,
                     allocated_ports,
                     dns_tx,
@@ -328,6 +336,7 @@ fn process_socks_handshake(
     sockets: &mut SocketSet<'_>,
     iface: &mut Interface,
     inner_ip: Ipv4Addr,
+    dns: &DnsResolver,
     next_port: &mut u16,
     allocated_ports: &mut HashSet<u16>,
     dns_tx: &Sender<DnsResult>,
@@ -390,7 +399,7 @@ fn process_socks_handshake(
             let domain = domain.to_string();
             flow.input.drain(..request_len);
             flow.set_state(LocalState::Resolving);
-            spawn_ipv4_query(id, domain, port, dns_tx.clone());
+            spawn_ipv4_query(id, domain, port, dns.clone(), dns_tx.clone());
             return;
         }
         _ => {
@@ -456,6 +465,7 @@ fn handle_dns_results(
     sockets: &mut SocketSet<'_>,
     iface: &mut Interface,
     inner_ip: Ipv4Addr,
+    dns: &DnsResolver,
     next_port: &mut u16,
     allocated_ports: &mut HashSet<u16>,
 ) {
@@ -489,7 +499,7 @@ fn handle_dns_results(
             Err(()) => {
                 eprintln!(
                     "[flow {}] DNS {} failed via {}",
-                    answer.flow_id, answer.domain, DNS_SERVER
+                    answer.flow_id, answer.domain, dns
                 );
                 queue_socks_error(flow, 4);
             }
