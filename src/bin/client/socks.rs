@@ -5,7 +5,7 @@ use std::time::Duration;
 
 pub fn run(args: &cli::SocksArgs) -> Result<()> {
     let dns = socks::DnsResolver::parse(&args.dns)
-        .with_context(|| format!("invalid --dns value {}", args.dns))?;
+        .with_context(|| format!("invalid --dns value {:?}", args.dns))?;
     let ct = auth::get_ct(&args.user, &args.pass, &args.ct_pass);
     let nonce = auth::rand_u32()?;
     let open = auth::build_open(&args.user, &ct, args.mtu, args.encrypt, nonce);

@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use std::fmt;
 use std::io::Read;
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
+use std::num::NonZeroU16;
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::time::Duration;
@@ -12,7 +13,7 @@ const DNS_TIMEOUT: Duration = Duration::from_secs(3);
 #[derive(Clone, Debug)]
 pub enum DnsResolver {
     Udp(SocketAddr),
-    Dot { host: String, port: u16 },
+    Dot { host: String, port: NonZeroU16 },
     Doh { url: String },
 }
 
@@ -56,20 +57,43 @@ impl fmt::Display for DnsResolver {
     }
 }
 
-fn split_host_port(spec: &str, default_port: u16) -> Result<(String, u16)> {
+fn split_host_port(spec: &str, default_port: u16) -> Result<(String, NonZeroU16)> {
+    let default_port = NonZeroU16::new(default_port).expect("default DNS port is zero");
     if spec.is_empty() {
         anyhow::bail!("empty DNS host");
     }
-    match spec.rsplit_once(':') {
-        Some((host, port)) if !host.is_empty() => {
-            let port = port.parse().context("invalid DNS port")?;
-            if port == 0 {
-                anyhow::bail!("invalid DNS port: {port}");
-            }
-            Ok((host.to_string(), port))
+    let (host, port) = if let Some(rest) = spec.strip_prefix('[') {
+        let (host, tail) = rest
+            .split_once(']')
+            .ok_or_else(|| anyhow::anyhow!("unclosed bracket in DNS host: {spec}"))?;
+        let port = match tail.strip_prefix(':') {
+            Some(port) => parse_dns_port(port, spec)?,
+            None if tail.is_empty() => default_port,
+            None => anyhow::bail!("invalid DNS host: {spec}"),
+        };
+        (host.to_string(), port)
+    } else {
+        if spec.matches(':').count() > 1 {
+            anyhow::bail!("wrap IPv6 DNS hosts in brackets: [{spec}]");
         }
-        _ => Ok((spec.to_string(), default_port)),
+        match spec.rsplit_once(':') {
+            Some((host, port)) if !host.is_empty() => {
+                (host.to_string(), parse_dns_port(port, spec)?)
+            }
+            _ => (spec.to_string(), default_port),
+        }
+    };
+    if host.is_empty() {
+        anyhow::bail!("empty DNS host");
     }
+    Ok((host, port))
+}
+
+fn parse_dns_port(port: &str, spec: &str) -> Result<NonZeroU16> {
+    let port: u16 = port
+        .parse()
+        .with_context(|| format!("invalid DNS port in {spec}"))?;
+    NonZeroU16::new(port).ok_or_else(|| anyhow::anyhow!("invalid DNS port in {spec}"))
 }
 
 pub(crate) struct DnsResult {
@@ -102,27 +126,30 @@ fn resolve_ipv4(domain: &str, resolver: &DnsResolver) -> Result<Ipv4Addr> {
     let query = build_a_query(query_id, domain)?;
     let response = match resolver {
         DnsResolver::Udp(addr) => udp_query(&query, *addr)?,
-        DnsResolver::Dot { host, port } => dot_query(&query, host, *port)?,
+        DnsResolver::Dot { host, port } => dot_query(&query, host, port.get())?,
         DnsResolver::Doh { url } => doh_query(&query, url)?,
     };
     parse_a_response(query_id, &response)
 }
 
 fn udp_query(query: &[u8], addr: SocketAddr) -> Result<Vec<u8>> {
-    let socket = UdpSocket::bind("0.0.0.0:0").context("bind DNS socket")?;
+    let bind_addr = if addr.is_ipv6() {
+        "[::]:0"
+    } else {
+        "0.0.0.0:0"
+    };
+    let socket = UdpSocket::bind(bind_addr).context("bind DNS socket")?;
     socket.set_read_timeout(Some(DNS_TIMEOUT))?;
     socket.set_write_timeout(Some(DNS_TIMEOUT))?;
     socket
-        .send_to(query, addr)
+        .connect(addr)
+        .with_context(|| format!("connect DNS server {addr}"))?;
+    socket
+        .send(query)
         .with_context(|| format!("query DNS server {addr}"))?;
 
     let mut response = vec![0u8; 4096];
-    let (len, source) = socket
-        .recv_from(&mut response)
-        .context("receive DNS response")?;
-    if source != addr {
-        anyhow::bail!("DNS response from unexpected server {source}");
-    }
+    let len = socket.recv(&mut response).context("receive DNS response")?;
     response.truncate(len);
     Ok(response)
 }
@@ -293,11 +320,19 @@ mod tests {
         ));
         assert!(matches!(
             DnsResolver::parse("tls://dns.alidns.com").unwrap(),
-            DnsResolver::Dot { host, port } if host == "dns.alidns.com" && port == 853
+            DnsResolver::Dot { host, port } if host == "dns.alidns.com" && port.get() == 853
         ));
         assert!(matches!(
             DnsResolver::parse("tls://dns.alidns.com:8543").unwrap(),
-            DnsResolver::Dot { port, .. } if port == 8543
+            DnsResolver::Dot { port, .. } if port.get() == 8543
+        ));
+        assert!(matches!(
+            DnsResolver::parse("tls://[2001:db8::1]:853").unwrap(),
+            DnsResolver::Dot { host, port } if host == "2001:db8::1" && port.get() == 853
+        ));
+        assert!(matches!(
+            DnsResolver::parse("tls://[2001:db8::1]").unwrap(),
+            DnsResolver::Dot { host, port } if host == "2001:db8::1" && port.get() == 853
         ));
         assert!(matches!(
             DnsResolver::parse("https://dns.alidns.com/dns-query").unwrap(),
@@ -313,6 +348,8 @@ mod tests {
         ));
         assert!(DnsResolver::parse("tls://").is_err());
         assert!(DnsResolver::parse("tls://dns.alidns.com:0").is_err());
+        assert!(DnsResolver::parse("tls://2001:db8::1").is_err());
+        assert!(DnsResolver::parse("tls://[2001:db8::1").is_err());
         assert!(DnsResolver::parse("https://").is_err());
         assert!(DnsResolver::parse("https:// not a url").is_err());
         assert!(DnsResolver::parse("https://dns.alidns.com").is_err());

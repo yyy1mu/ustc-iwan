@@ -160,7 +160,7 @@ fn connect_server(cli: &cli::Cli, config: &LocalConfig) -> Result<()> {
     }
 
     let dns = iwan::core::socks::DnsResolver::parse(&cli.dns)
-        .with_context(|| format!("invalid --dns value {}", cli.dns))?;
+        .with_context(|| format!("invalid --dns value {:?}", cli.dns))?;
     let srv = select_server(&config.servers, cli.server.as_deref())?;
     let host = srv["host"].as_str().context("missing host")?;
     let port = srv["port"].as_u64().unwrap_or(6001) as u16;
