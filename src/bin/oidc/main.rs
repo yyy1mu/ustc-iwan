@@ -159,7 +159,9 @@ fn connect_server(cli: &cli::Cli, config: &LocalConfig) -> Result<()> {
         anyhow::bail!("no servers in config");
     }
 
-    let srv = select_server(&config.servers)?;
+    let dns = iwan::core::socks::DnsResolver::parse(&cli.dns)
+        .with_context(|| format!("invalid --dns value {}", cli.dns))?;
+    let srv = select_server(&config.servers, cli.server.as_deref())?;
     let host = srv["host"].as_str().context("missing host")?;
     let port = srv["port"].as_u64().unwrap_or(6001) as u16;
     let srv_user = srv["username"].as_str().unwrap_or("");
@@ -206,7 +208,7 @@ fn connect_server(cli: &cli::Cli, config: &LocalConfig) -> Result<()> {
     let xk: Vec<u8> = sk[..8].to_vec();
 
     if socks_mode(cli) {
-        return run_socks(cli, &sock, &xk, &auth_result);
+        return run_socks(cli, &sock, &xk, &auth_result, dns);
     }
 
     #[cfg(target_os = "linux")]
@@ -260,6 +262,7 @@ fn run_socks(
     sock: &std::net::UdpSocket,
     xor_key: &[u8],
     auth_result: &auth::AuthResult,
+    dns: iwan::core::socks::DnsResolver,
 ) -> Result<()> {
     let inner_ip = auth_result
         .tun
@@ -280,6 +283,7 @@ fn run_socks(
             sid: auth_result.sid,
             token: auth_result.tok,
             encryption: cli.encrypt,
+            dns,
         },
     )
 }
@@ -350,7 +354,24 @@ fn print_servers(servers: &[serde_json::Value]) {
     }
 }
 
-fn select_server(servers: &[serde_json::Value]) -> Result<&serde_json::Value> {
+fn select_server<'a>(
+    servers: &'a [serde_json::Value],
+    choice: Option<&str>,
+) -> Result<&'a serde_json::Value> {
+    if let Some(choice) = choice {
+        if let Ok(index) = choice.parse::<usize>() {
+            return servers
+                .get(index.wrapping_sub(1))
+                .with_context(|| format!("server index {index} out of range 1-{}", servers.len()))
+                .map(|s| s);
+        }
+        return servers
+            .iter()
+            .find(|s| s["name"].as_str().unwrap_or("").contains(choice))
+            .with_context(|| format!("no server name contains \"{choice}\""))
+            .map(|s| s);
+    }
+
     loop {
         print!("  Select server [1-{}]: ", servers.len());
         io::stdout().flush().ok();
