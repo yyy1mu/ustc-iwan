@@ -1,10 +1,70 @@
 use anyhow::{Context, Result};
-use std::net::{Ipv4Addr, UdpSocket};
+use std::fmt;
+use std::io::Read;
+use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 use std::sync::mpsc::Sender;
+use std::sync::Arc;
 use std::time::Duration;
 
-pub(crate) const DNS_SERVER: &str = "114.114.114.114:53";
+pub const DEFAULT_DNS: &str = "114.114.114.114:53";
 const DNS_TIMEOUT: Duration = Duration::from_secs(3);
+
+#[derive(Clone, Debug)]
+pub enum DnsResolver {
+    Udp(SocketAddr),
+    Dot { host: String, port: u16 },
+    Doh { url: String },
+}
+
+impl DnsResolver {
+    /// Parse a resolver spec: `ip[:port]` (plain UDP), `tls://host[:port]`
+    /// (DNS over TLS) or `https://...` (DNS over HTTPS).
+    pub fn parse(spec: &str) -> Result<Self> {
+        let spec = spec.trim();
+        if let Some(rest) = spec.strip_prefix("tls://") {
+            let (host, port) = split_host_port(rest, 853)?;
+            return Ok(Self::Dot { host, port });
+        }
+        if spec.starts_with("https://") {
+            return Ok(Self::Doh { url: spec.into() });
+        }
+        if let Ok(addr) = spec.parse::<SocketAddr>() {
+            return Ok(Self::Udp(addr));
+        }
+        let with_port = if spec.contains(':') {
+            spec.to_string()
+        } else {
+            format!("{spec}:53")
+        };
+        let addr: SocketAddr = with_port
+            .parse()
+            .with_context(|| format!("invalid DNS resolver: {spec}"))?;
+        Ok(Self::Udp(addr))
+    }
+}
+
+impl fmt::Display for DnsResolver {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Udp(addr) => write!(f, "{addr}"),
+            Self::Dot { host, port } => write!(f, "tls://{host}:{port}"),
+            Self::Doh { url } => write!(f, "{url}"),
+        }
+    }
+}
+
+fn split_host_port(spec: &str, default_port: u16) -> Result<(String, u16)> {
+    if spec.is_empty() {
+        anyhow::bail!("empty DNS host");
+    }
+    match spec.rsplit_once(':') {
+        Some((host, port)) if !host.is_empty() => Ok((
+            host.to_string(),
+            port.parse().context("invalid DNS port")?,
+        )),
+        _ => Ok((spec.to_string(), default_port)),
+    }
+}
 
 pub(crate) struct DnsResult {
     pub(crate) flow_id: u64,
@@ -13,9 +73,15 @@ pub(crate) struct DnsResult {
     pub(crate) result: std::result::Result<Ipv4Addr, ()>,
 }
 
-pub(crate) fn spawn_ipv4_query(flow_id: u64, domain: String, port: u16, sender: Sender<DnsResult>) {
+pub(crate) fn spawn_ipv4_query(
+    flow_id: u64,
+    domain: String,
+    port: u16,
+    resolver: DnsResolver,
+    sender: Sender<DnsResult>,
+) {
     std::thread::spawn(move || {
-        let result = resolve_ipv4(&domain).map_err(|_| ());
+        let result = resolve_ipv4(&domain, &resolver).map_err(|_| ());
         let _ = sender.send(DnsResult {
             flow_id,
             domain,
@@ -25,24 +91,89 @@ pub(crate) fn spawn_ipv4_query(flow_id: u64, domain: String, port: u16, sender: 
     });
 }
 
-fn resolve_ipv4(domain: &str) -> Result<Ipv4Addr> {
+fn resolve_ipv4(domain: &str, resolver: &DnsResolver) -> Result<Ipv4Addr> {
     let query_id = rand::random();
     let query = build_a_query(query_id, domain)?;
+    let response = match resolver {
+        DnsResolver::Udp(addr) => udp_query(&query, *addr)?,
+        DnsResolver::Dot { host, port } => dot_query(&query, host, *port)?,
+        DnsResolver::Doh { url } => doh_query(&query, url)?,
+    };
+    parse_a_response(query_id, &response)
+}
+
+fn udp_query(query: &[u8], addr: SocketAddr) -> Result<Vec<u8>> {
     let socket = UdpSocket::bind("0.0.0.0:0").context("bind DNS socket")?;
     socket.set_read_timeout(Some(DNS_TIMEOUT))?;
     socket.set_write_timeout(Some(DNS_TIMEOUT))?;
     socket
-        .send_to(&query, DNS_SERVER)
-        .with_context(|| format!("query DNS server {DNS_SERVER}"))?;
+        .send_to(query, addr)
+        .with_context(|| format!("query DNS server {addr}"))?;
 
-    let mut response = [0u8; 4096];
-    let (len, source) = socket
-        .recv_from(&mut response)
-        .context("receive DNS response")?;
-    if source.ip() != Ipv4Addr::new(114, 114, 114, 114) {
+    let mut response = vec![0u8; 4096];
+    let (len, source) = socket.recv_from(&mut response).context("receive DNS response")?;
+    if source.ip() != addr.ip() {
         anyhow::bail!("DNS response from unexpected server {source}");
     }
-    parse_a_response(query_id, &response[..len])
+    response.truncate(len);
+    Ok(response)
+}
+
+fn dot_query(query: &[u8], host: &str, port: u16) -> Result<Vec<u8>> {
+    use rustls::pki_types::ServerName;
+    use rustls::{ClientConfig, ClientConnection, RootCertStore, Stream};
+
+    let server_name = ServerName::try_from(host)
+        .map_err(|_| anyhow::anyhow!("invalid DNS-over-TLS host: {host}"))?
+        .to_owned();
+    let mut roots = RootCertStore::empty();
+    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let config = ClientConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .context("TLS protocol versions")?
+    .with_root_certificates(roots)
+    .with_no_client_auth();
+
+    let mut stream = std::net::TcpStream::connect((host, port)).context("connect DNS-over-TLS")?;
+    stream.set_read_timeout(Some(DNS_TIMEOUT))?;
+    stream.set_write_timeout(Some(DNS_TIMEOUT))?;
+    let mut conn =
+        ClientConnection::new(Arc::new(config), server_name).context("TLS handshake setup")?;
+    let mut tls = Stream::new(&mut conn, &mut stream);
+
+    let mut frame = Vec::with_capacity(2 + query.len());
+    frame.extend_from_slice(&(query.len() as u16).to_be_bytes());
+    frame.extend_from_slice(query);
+    std::io::Write::write_all(&mut tls, &frame).context("send DNS-over-TLS query")?;
+
+    let mut len_buf = [0u8; 2];
+    tls.read_exact(&mut len_buf).context("read DNS-over-TLS length")?;
+    let len = u16::from_be_bytes(len_buf) as usize;
+    let mut response = vec![0u8; len];
+    tls.read_exact(&mut response)
+        .context("read DNS-over-TLS response")?;
+    Ok(response)
+}
+
+fn doh_query(query: &[u8], url: &str) -> Result<Vec<u8>> {
+    let agent = ureq::AgentBuilder::new()
+        .timeout(DNS_TIMEOUT)
+        .try_proxy_from_env(false)
+        .build();
+    let response = agent
+        .post(url)
+        .set("Content-Type", "application/dns-message")
+        .set("Accept", "application/dns-message")
+        .send_bytes(query)
+        .with_context(|| format!("query DNS-over-HTTPS server {url}"))?;
+    let mut body = Vec::new();
+    response
+        .into_reader()
+        .read_to_end(&mut body)
+        .context("read DNS-over-HTTPS response")?;
+    Ok(body)
 }
 
 fn build_a_query(id: u16, domain: &str) -> Result<Vec<u8>> {
@@ -141,6 +272,32 @@ fn skip_name(packet: &[u8], mut offset: usize) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_resolver_specs() {
+        assert!(matches!(
+            DnsResolver::parse("223.5.5.5").unwrap(),
+            DnsResolver::Udp(addr) if addr.to_string() == "223.5.5.5:53"
+        ));
+        assert!(matches!(
+            DnsResolver::parse("223.5.5.5:5353").unwrap(),
+            DnsResolver::Udp(addr) if addr.to_string() == "223.5.5.5:5353"
+        ));
+        assert!(matches!(
+            DnsResolver::parse("tls://dns.alidns.com").unwrap(),
+            DnsResolver::Dot { host, port } if host == "dns.alidns.com" && port == 853
+        ));
+        assert!(matches!(
+            DnsResolver::parse("tls://dns.alidns.com:8543").unwrap(),
+            DnsResolver::Dot { port, .. } if port == 8543
+        ));
+        assert!(matches!(
+            DnsResolver::parse("https://dns.alidns.com/dns-query").unwrap(),
+            DnsResolver::Doh { url } if url == "https://dns.alidns.com/dns-query"
+        ));
+        assert!(DnsResolver::parse("tls://").is_err());
+        assert!(DnsResolver::parse("not a resolver").is_err());
+    }
 
     #[test]
     fn builds_and_parses_a_messages() {
