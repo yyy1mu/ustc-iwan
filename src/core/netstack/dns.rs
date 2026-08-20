@@ -26,21 +26,30 @@ impl DnsResolver {
             return Ok(Self::Dot { host, port });
         }
         if spec.starts_with("https://") {
+            if !is_valid_doh_url(spec) {
+                anyhow::bail!("invalid DNS-over-HTTPS URL: {spec}");
+            }
             return Ok(Self::Doh { url: spec.into() });
         }
         if let Ok(addr) = spec.parse::<SocketAddr>() {
             return Ok(Self::Udp(addr));
         }
-        let with_port = if spec.contains(':') {
-            spec.to_string()
-        } else {
-            format!("{spec}:53")
-        };
-        let addr: SocketAddr = with_port
+        if let Ok(ip) = spec.parse::<std::net::IpAddr>() {
+            return Ok(Self::Udp(SocketAddr::new(ip, 53)));
+        }
+        let addr: SocketAddr = format!("{spec}:53")
             .parse()
             .with_context(|| format!("invalid DNS resolver: {spec}"))?;
         Ok(Self::Udp(addr))
     }
+}
+
+fn is_valid_doh_url(url: &str) -> bool {
+    let rest = &url["https://".len()..];
+    let host_part = rest.split(['/', '?', '#']).next().unwrap_or("");
+    !host_part.is_empty()
+        && !host_part.contains(char::is_whitespace)
+        && rest.len() > host_part.len()
 }
 
 impl fmt::Display for DnsResolver {
@@ -58,10 +67,9 @@ fn split_host_port(spec: &str, default_port: u16) -> Result<(String, u16)> {
         anyhow::bail!("empty DNS host");
     }
     match spec.rsplit_once(':') {
-        Some((host, port)) if !host.is_empty() => Ok((
-            host.to_string(),
-            port.parse().context("invalid DNS port")?,
-        )),
+        Some((host, port)) if !host.is_empty() => {
+            Ok((host.to_string(), port.parse().context("invalid DNS port")?))
+        }
         _ => Ok((spec.to_string(), default_port)),
     }
 }
@@ -111,7 +119,9 @@ fn udp_query(query: &[u8], addr: SocketAddr) -> Result<Vec<u8>> {
         .with_context(|| format!("query DNS server {addr}"))?;
 
     let mut response = vec![0u8; 4096];
-    let (len, source) = socket.recv_from(&mut response).context("receive DNS response")?;
+    let (len, source) = socket
+        .recv_from(&mut response)
+        .context("receive DNS response")?;
     if source.ip() != addr.ip() {
         anyhow::bail!("DNS response from unexpected server {source}");
     }
@@ -128,13 +138,12 @@ fn dot_query(query: &[u8], host: &str, port: u16) -> Result<Vec<u8>> {
         .to_owned();
     let mut roots = RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    let config = ClientConfig::builder_with_provider(Arc::new(
-        rustls::crypto::ring::default_provider(),
-    ))
-    .with_safe_default_protocol_versions()
-    .context("TLS protocol versions")?
-    .with_root_certificates(roots)
-    .with_no_client_auth();
+    let config =
+        ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+            .with_safe_default_protocol_versions()
+            .context("TLS protocol versions")?
+            .with_root_certificates(roots)
+            .with_no_client_auth();
 
     let mut stream = std::net::TcpStream::connect((host, port)).context("connect DNS-over-TLS")?;
     stream.set_read_timeout(Some(DNS_TIMEOUT))?;
@@ -149,7 +158,8 @@ fn dot_query(query: &[u8], host: &str, port: u16) -> Result<Vec<u8>> {
     std::io::Write::write_all(&mut tls, &frame).context("send DNS-over-TLS query")?;
 
     let mut len_buf = [0u8; 2];
-    tls.read_exact(&mut len_buf).context("read DNS-over-TLS length")?;
+    tls.read_exact(&mut len_buf)
+        .context("read DNS-over-TLS length")?;
     let len = u16::from_be_bytes(len_buf) as usize;
     let mut response = vec![0u8; len];
     tls.read_exact(&mut response)
@@ -295,7 +305,18 @@ mod tests {
             DnsResolver::parse("https://dns.alidns.com/dns-query").unwrap(),
             DnsResolver::Doh { url } if url == "https://dns.alidns.com/dns-query"
         ));
+        assert!(matches!(
+            DnsResolver::parse("2001:4860:4860::8888").unwrap(),
+            DnsResolver::Udp(addr) if addr.to_string() == "[2001:4860:4860::8888]:53"
+        ));
+        assert!(matches!(
+            DnsResolver::parse("[2001:4860:4860::8888]:5353").unwrap(),
+            DnsResolver::Udp(addr) if addr.to_string() == "[2001:4860:4860::8888]:5353"
+        ));
         assert!(DnsResolver::parse("tls://").is_err());
+        assert!(DnsResolver::parse("https://").is_err());
+        assert!(DnsResolver::parse("https:// not a url").is_err());
+        assert!(DnsResolver::parse("https://dns.alidns.com").is_err());
         assert!(DnsResolver::parse("not a resolver").is_err());
     }
 
