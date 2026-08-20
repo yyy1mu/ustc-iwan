@@ -26,7 +26,9 @@ impl DnsResolver {
             return Ok(Self::Dot { host, port });
         }
         if spec.starts_with("https://") {
-            if !is_valid_doh_url(spec) {
+            let url = url::Url::parse(spec)
+                .with_context(|| format!("invalid DNS-over-HTTPS URL: {spec}"))?;
+            if url.host_str().is_none() || url.path().len() <= 1 {
                 anyhow::bail!("invalid DNS-over-HTTPS URL: {spec}");
             }
             return Ok(Self::Doh { url: spec.into() });
@@ -42,14 +44,6 @@ impl DnsResolver {
             .with_context(|| format!("invalid DNS resolver: {spec}"))?;
         Ok(Self::Udp(addr))
     }
-}
-
-fn is_valid_doh_url(url: &str) -> bool {
-    let rest = &url["https://".len()..];
-    let host_part = rest.split(['/', '?', '#']).next().unwrap_or("");
-    !host_part.is_empty()
-        && !host_part.contains(char::is_whitespace)
-        && rest.len() > host_part.len()
 }
 
 impl fmt::Display for DnsResolver {
@@ -68,7 +62,11 @@ fn split_host_port(spec: &str, default_port: u16) -> Result<(String, u16)> {
     }
     match spec.rsplit_once(':') {
         Some((host, port)) if !host.is_empty() => {
-            Ok((host.to_string(), port.parse().context("invalid DNS port")?))
+            let port = port.parse().context("invalid DNS port")?;
+            if port == 0 {
+                anyhow::bail!("invalid DNS port: {port}");
+            }
+            Ok((host.to_string(), port))
         }
         _ => Ok((spec.to_string(), default_port)),
     }
@@ -122,7 +120,7 @@ fn udp_query(query: &[u8], addr: SocketAddr) -> Result<Vec<u8>> {
     let (len, source) = socket
         .recv_from(&mut response)
         .context("receive DNS response")?;
-    if source.ip() != addr.ip() {
+    if source != addr {
         anyhow::bail!("DNS response from unexpected server {source}");
     }
     response.truncate(len);
@@ -314,9 +312,11 @@ mod tests {
             DnsResolver::Udp(addr) if addr.to_string() == "[2001:4860:4860::8888]:5353"
         ));
         assert!(DnsResolver::parse("tls://").is_err());
+        assert!(DnsResolver::parse("tls://dns.alidns.com:0").is_err());
         assert!(DnsResolver::parse("https://").is_err());
         assert!(DnsResolver::parse("https:// not a url").is_err());
         assert!(DnsResolver::parse("https://dns.alidns.com").is_err());
+        assert!(DnsResolver::parse("https://:443/dns-query").is_err());
         assert!(DnsResolver::parse("not a resolver").is_err());
     }
 

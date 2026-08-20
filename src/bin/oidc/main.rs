@@ -360,8 +360,9 @@ fn select_server<'a>(
 ) -> Result<&'a serde_json::Value> {
     if let Some(choice) = choice {
         if let Ok(index) = choice.parse::<usize>() {
-            return servers
-                .get(index.wrapping_sub(1))
+            return index
+                .checked_sub(1)
+                .and_then(|i| servers.get(i))
                 .with_context(|| format!("server index {index} out of range 1-{}", servers.len()))
                 .map(|s| s);
         }
