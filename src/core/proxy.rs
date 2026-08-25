@@ -69,6 +69,11 @@ pub fn run_pump(
     let r1 = running.clone();
     let t1 = std::thread::spawn(move || {
         let mut buf = vec![0u8; 2048];
+        let mut pfd = libc::pollfd {
+            fd: tun_fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
         if super::util::debug_enabled() {
             eprintln!("[TUN→UDP] started");
         }
@@ -80,7 +85,7 @@ pub fn run_pump(
             if n == -1 {
                 let e = std::io::Error::last_os_error();
                 if e.kind() == std::io::ErrorKind::WouldBlock {
-                    std::thread::sleep(Duration::from_millis(50));
+                    unsafe { libc::poll(&mut pfd, 1, 200) };
                     continue;
                 }
                 r1.store(false, Ordering::Relaxed);
