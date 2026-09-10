@@ -63,11 +63,19 @@ pub struct Cli {
     #[arg(long, default_value = "127.0.0.1:1080")]
     pub socks_listen: std::net::SocketAddr,
 
-    /// Maximum userspace inner IP MTU.
+    /// Maximum userspace inner IP MTU for --socks or --http.
     #[arg(long, default_value = "1380")]
     pub socks_mtu: u16,
 
-    /// DNS resolver for SOCKS5 domain requests: ip[:port], tls://host[:port] or https://url.
+    /// Use a rootless userspace HTTP proxy instead of a TUN device.
+    #[arg(long)]
+    pub http: bool,
+
+    /// Local HTTP proxy listen address.
+    #[arg(long, default_value = "127.0.0.1:8080")]
+    pub http_listen: std::net::SocketAddr,
+
+    /// DNS resolver for SOCKS5/HTTP domain requests: ip[:port], tls://host[:port] or https://url.
     #[arg(long, default_value = "114.114.114.114:53")]
     pub dns: String,
 }

@@ -18,7 +18,7 @@ USTC iWAN 命令行客户端，用于通过统一身份认证获取线路配置�
 | `iwan-client` | 手动指定服务器、用户名和密码，适合调试或自定义接入。 |
 | `iwan-server` | 自建兼容测试服务端，普通用户通常不需要。 |
 
-两个客户端均支持无 TUN 的 SOCKS5 模式。该模式由 smoltcp 在用户态生成完整
+两个客户端均支持无 TUN 的 SOCKS5/HTTP 模式。该模式由 smoltcp 在用户态生成完整
 TCP/IPv4 数据包，不创建网卡、不修改系统路由，也不需要 root 或
 `CAP_NET_ADMIN`。
 
@@ -26,8 +26,8 @@ TCP/IPv4 数据包，不创建网卡、不修改系统路由，也不需要 root
 
 - TUN 模式仅支持 Linux，需要 `/dev/net/tun`。
 - TUN 模式连接时需要 root 权限，或为程序授予 `CAP_NET_ADMIN`。
-- SOCKS5 模式支持 Linux、macOS 和 Windows，不创建 TUN，不需要上述权限。
-- macOS 和 Windows 版本只包含 SOCKS5 模式。
+- SOCKS5/HTTP 模式支持 Linux、macOS 和 Windows，不创建 TUN，不需要上述权限。
+- macOS 和 Windows 版本只包含 SOCKS5/HTTP 模式。
 
 ## 下载
 
@@ -125,7 +125,7 @@ Linux：
 ./iwan-client-oidc --connect --socks
 ```
 
-macOS（仅支持 SOCKS5）：
+macOS（无 TUN，仅支持 SOCKS5/HTTP）：
 
 ```bash
 ./iwan-client-oidc-macos-aarch64 --connect --socks \
@@ -135,7 +135,7 @@ macOS（仅支持 SOCKS5）：
 
 Intel Mac 请将文件名替换为 `iwan-client-oidc-macos-x86_64`。
 
-Windows PowerShell（仅支持 SOCKS5）：
+Windows PowerShell（无 TUN，仅支持 SOCKS5/HTTP）：
 
 ```powershell
 .\iwan-client-oidc-windows-x86_64.exe --connect --socks `
@@ -171,6 +171,40 @@ curl --socks5-hostname 127.0.0.1:1080 https://www.example.com/
 
 不支持 IPv6、SOCKS5 `BIND` 或 `UDP ASSOCIATE`。这些请求会收到对应的
 SOCKS5 错误响应。
+
+### 无 TUN 的 HTTP 代理模式
+
+与 SOCKS5 模式相同，用 `--http` 显式启用：
+
+```bash
+./iwan-client-oidc --connect --http
+```
+
+macOS/Windows 示例：
+
+```bash
+./iwan-client-oidc-macos-aarch64 --connect --http \
+  --http-listen 127.0.0.1:8080
+```
+
+默认监听 `127.0.0.1:8080`，可用 `--http-listen` 修改；内层 MTU 与 SOCKS5
+共用 `--socks-mtu`，域名解析同样使用 `--dns`。`--socks` 与 `--http` 互斥。
+
+支持两种请求：
+
+- `CONNECT host:port`：用于 HTTPS 等任意 TCP 隧道。
+- 明文 HTTP 转发：`GET http://host/path HTTP/1.1`，代理改写为
+  `GET /path HTTP/1.1` 后转发。
+
+使用示例：
+
+```bash
+curl -x http://127.0.0.1:8080 https://www.example.com/
+curl -x http://127.0.0.1:8080 http://www.example.com/
+```
+
+限制：仅支持 IPv4 目标；不支持代理认证；明文 HTTP 每个连接只处理一个
+请求（转发时强制 `Connection: close`），后续请求由客户端重新连接。
 
 ### 4. 一次完成
 
@@ -272,6 +306,17 @@ sudo ./iwan-client proxy \
   --user <USER> \
   --pass '<PASSWORD>' \
   --listen 127.0.0.1:1080
+```
+
+不创建 TUN，启动用户态 HTTP 代理：
+
+```bash
+./iwan-client http \
+  --server <SERVER_IP> \
+  --port 6001 \
+  --user <USER> \
+  --pass '<PASSWORD>' \
+  --listen 127.0.0.1:8080
 ```
 
 ## 从源码构建

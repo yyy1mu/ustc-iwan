@@ -19,6 +19,8 @@ pub enum Command {
     Proxy(ProxyArgs),
     /// Run a rootless SOCKS5 proxy using a userspace TCP/IP stack.
     Socks(SocksArgs),
+    /// Run a rootless HTTP proxy using a userspace TCP/IP stack.
+    Http(HttpArgs),
 }
 
 #[derive(Parser)]
@@ -75,7 +77,7 @@ pub struct ProxyArgs {
 }
 
 #[derive(Parser)]
-pub struct SocksArgs {
+pub struct LocalProxyArgs {
     #[arg(long)]
     pub server: String,
     #[arg(long, default_value = "6001")]
@@ -90,10 +92,25 @@ pub struct SocksArgs {
     pub encrypt: u8,
     #[arg(long, default_value = "1380")]
     pub mtu: u16,
-    /// Local SOCKS5 listen address.
-    #[arg(long, default_value = "127.0.0.1:1080")]
-    pub listen: std::net::SocketAddr,
     /// DNS resolver for domain requests: ip[:port], tls://host[:port] or https://url.
     #[arg(long, default_value = "114.114.114.114:53")]
     pub dns: String,
+}
+
+#[derive(Parser)]
+pub struct SocksArgs {
+    #[command(flatten)]
+    pub proxy: LocalProxyArgs,
+    /// Local SOCKS5 listen address.
+    #[arg(long, default_value = "127.0.0.1:1080")]
+    pub listen: std::net::SocketAddr,
+}
+
+#[derive(Parser)]
+pub struct HttpArgs {
+    #[command(flatten)]
+    pub proxy: LocalProxyArgs,
+    /// Local HTTP proxy listen address.
+    #[arg(long, default_value = "127.0.0.1:8080")]
+    pub listen: std::net::SocketAddr,
 }

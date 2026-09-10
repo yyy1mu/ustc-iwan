@@ -23,12 +23,15 @@ fn main() -> Result<()> {
     let do_fetch = cli.fetch || cli.all;
     let do_list = cli.list || cli.all;
     let do_connect = cli.connect || cli.all;
-    if cli.socks && !do_connect {
-        anyhow::bail!("--socks requires --connect or --all");
+    if cli.socks && cli.http {
+        anyhow::bail!("--socks and --http are mutually exclusive");
+    }
+    if (cli.socks || cli.http) && !do_connect {
+        anyhow::bail!("--socks or --http requires --connect or --all");
     }
     #[cfg(not(target_os = "linux"))]
-    if do_connect && !cli.socks {
-        anyhow::bail!("--socks is required for --connect or --all on this platform");
+    if do_connect && !(cli.socks || cli.http) {
+        anyhow::bail!("--socks or --http is required for --connect or --all on this platform");
     }
 
     let config = if do_fetch {
@@ -176,7 +179,7 @@ fn connect_server(cli: &cli::Cli, config: &LocalConfig) -> Result<()> {
         anyhow::bail!("no servers in config");
     }
 
-    let dns = iwan::core::socks::DnsResolver::parse(&cli.dns)
+    let dns = iwan::core::local_proxy::DnsResolver::parse(&cli.dns)
         .with_context(|| format!("invalid --dns value {:?}", cli.dns))?;
     let srv = select_server(&config.servers, cli.server.as_deref())?;
     anyhow::ensure!(!srv.host.is_empty(), "selected server has no host");
@@ -223,8 +226,8 @@ fn connect_server(cli: &cli::Cli, config: &LocalConfig) -> Result<()> {
     let sk = crypto::session_key(&srv.username, &password);
     let xk: Vec<u8> = sk[..8].to_vec();
 
-    if cli.socks {
-        return run_socks(cli, &sock, &xk, &auth_result, dns);
+    if cli.socks || cli.http {
+        return run_local_proxy(cli, &sock, &xk, &auth_result, dns);
     }
 
     #[cfg(target_os = "linux")]
@@ -269,12 +272,12 @@ fn route_targets(cli: &cli::Cli) -> Vec<String> {
     targets
 }
 
-fn run_socks(
+fn run_local_proxy(
     cli: &cli::Cli,
     sock: &std::net::UdpSocket,
     xor_key: &[u8],
     auth_result: &auth::AuthResult,
-    dns: iwan::core::socks::DnsResolver,
+    dns: iwan::core::local_proxy::DnsResolver,
 ) -> Result<()> {
     let inner_ip = auth_result
         .tun
@@ -284,10 +287,22 @@ fn run_socks(
         .gw
         .parse()
         .context("server returned invalid gateway IPv4 address")?;
-    iwan::core::socks::run(
+    let (protocol, listen) = if cli.http {
+        (
+            iwan::core::local_proxy::ProxyProtocol::Http,
+            cli.http_listen,
+        )
+    } else {
+        (
+            iwan::core::local_proxy::ProxyProtocol::Socks5,
+            cli.socks_listen,
+        )
+    };
+    iwan::core::local_proxy::run(
         sock,
-        iwan::core::socks::SocksConfig {
-            listen: cli.socks_listen,
+        iwan::core::local_proxy::ProxyConfig {
+            listen,
+            protocol,
             inner_ip,
             gateway,
             mtu: usize::from(auth_result.mtu.min(cli.socks_mtu)),

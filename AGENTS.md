@@ -4,11 +4,11 @@
 
 ## 1. 项目简介
 
-`ustc-iwan` 是 USTC iWAN 的 Rust 命令行客户端，通过统一身份认证（OIDC）获取线路配置，并用 Linux TUN 隧道或跨平台用户态 SOCKS5 代理连接。
+`ustc-iwan` 是 USTC iWAN 的 Rust 命令行客户端，通过统一身份认证（OIDC）获取线路配置，并用 Linux TUN 隧道或跨平台用户态 SOCKS5/HTTP 代理连接。
 
 - 语言/构建：Rust 2021（`Cargo.toml` 的 `version = "0.1.0"` 与发布版本无关，发布版本由 Git tag `v*` 决定）。
 - 三个二进制：`iwan-client-oidc`（推荐）、`iwan-client`（手动参数/调试）、`iwan-server`（自建测试服务端，仅 Linux）。
-- 平台限制：TUN 模式仅 Linux 且需 root/CAP_NET_ADMIN；macOS/Windows 只有 SOCKS5 模式。
+- 平台限制：TUN 模式仅 Linux 且需 root/CAP_NET_ADMIN；macOS/Windows 只有 SOCKS5/HTTP 模式。
 
 ## 2. 目录结构及职责
 
@@ -20,11 +20,11 @@ src/core/                    客户端与服务端共享逻辑
   crypto.rs                  MD5/SHA256/HMAC/AES/XOR 等底层原语
   gcm.rs                     纯 Rust AES-GCM 解密线路密码、base64url
   protocol.rs                数据包类型、TLV 常量与编解码
-  socks.rs                   用户态 SOCKS5 数据面（smoltcp，跨平台）
+  local_proxy.rs             用户态 SOCKS5/HTTP 数据面（smoltcp，跨平台）
   util.rs                    IWAN_DEBUG、ip 命令封装
   proxy.rs / route.rs / tun.rs   TUN 数据面与路由（仅 Linux，cfg 门控）
   netstack/                  smoltcp 胶水层（device/dns/tunnel，crate 内部）
-src/bin/client/              手动客户端（cli/auth/ping/proxy/socks）
+src/bin/client/              手动客户端（cli/auth/ping/proxy/socks/http）
 src/bin/oidc/                OIDC 客户端（cli/controller/oidc + main 流程）
 src/bin/server/              测试服务端（cli/handler/session，仅 Linux）
 doc/                         README 引用的截图、参考脚本 full_flow.py
@@ -54,7 +54,7 @@ cargo zigbuild --bin iwan-client --target x86_64-unknown-linux-gnu.2.17 --releas
 ```bash
 cargo fmt --check                    # 当前通过，使用默认 rustfmt 配置（无 rustfmt.toml）
 cargo clippy --all-targets           # 当前无警告（无 clippy.toml，CI 不跑 lint）
-cargo test                           # 单元测试，当前 9 个全过
+cargo test                           # 单元测试，当前 13 个全过
 cargo check                          # Rust 无独立 typecheck，用 check/clippy 代替
 ```
 
@@ -76,7 +76,7 @@ cargo check                          # Rust 无独立 typecheck，用 check/clip
 - 共享逻辑放 `src/core`（库），`src/bin/*` 只做 CLI 参数解析与流程编排，保持薄封装。
 - 平台差异用 `#[cfg(target_os = "linux")]` 门控，非 Linux 目标必须能编译：Linux 专属功能在非 Linux 上要么整体 `cfg` 掉，要么给出明确报错（参考 `src/bin/server/main.rs`）。
 - 协议/加密是 wire-level 兼容层：`protocol.rs`、`crypto.rs`、`gcm.rs` 的常量与算法必须与 iWAN 服务端一致，改动前先确认兼容性。
-- SOCKS5 走 `core/socks.rs` + `core/netstack/`（smoltcp，用户态组包）；TUN 走 `core/proxy.rs` + `route.rs` + `tun.rs`。两条路径共享 `auth`/`protocol`/`crypto`。
+- SOCKS5/HTTP 走 `core/local_proxy.rs` + `core/netstack/`（smoltcp，用户态组包）；TUN 走 `core/proxy.rs` + `route.rs` + `tun.rs`。两条路径共享 `auth`/`protocol`/`crypto`。
 - OIDC 流程的 HTTP 签名、时间戳、nonce 逻辑在 `src/bin/oidc/controller.rs`；`APP_ID`/`APP_SECRET`/`CONTROLLER`/`DOMAIN` 是服务端约定常量，不要改动。
 - 新增依赖前先确认必要性；当前依赖刻意精简（见 `Cargo.toml`），不要随意引入大型框架。
 
@@ -106,7 +106,7 @@ cargo check                          # Rust 无独立 typecheck，用 check/clip
 3. `cargo test`，确保全部通过。
 4. `cargo build --release --bin <受影响的二进制>`；若涉及 `cfg` 分支，尽量验证非 Linux 目标仍可 `cargo check --target <target>`（TODO：确认团队是否要求跨平台 check）。
 5. 若改了 CLI 参数、配置文件格式或用户可见行为，同步更新 `README.md`（中文）。
-6. TUN/路由改动只能在 Linux + root 环境做真实联调；macOS 本地至少验证 SOCKS5 路径。
+6. TUN/路由改动只能在 Linux + root 环境做真实联调；macOS 本地至少验证 SOCKS5/HTTP 路径。
 
 ## 10. Git / commit 注意事项
 

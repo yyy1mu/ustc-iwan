@@ -1,8 +1,10 @@
 mod auth;
 mod cli;
+mod http;
 mod ping;
 #[cfg(target_os = "linux")]
 mod proxy;
+mod proxy_common;
 mod socks;
 
 use anyhow::Result;
@@ -24,5 +26,6 @@ fn main() -> Result<()> {
             proxy::run(&args, nonce, open)
         }
         cli::Command::Socks(args) => socks::run(&args),
+        cli::Command::Http(args) => http::run(&args),
     }
 }

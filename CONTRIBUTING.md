@@ -11,7 +11,7 @@
 ## 环境要求
 
 - Rust stable（edition 2021），与 CI 使用的 `dtolnay/rust-toolchain@stable` 一致。
-- TUN 模式仅在 Linux 可用，需要 root 或 `CAP_NET_ADMIN`；macOS/Windows 只能开发与验证 SOCKS5 模式。
+- TUN 模式仅在 Linux 可用，需要 root 或 `CAP_NET_ADMIN`；macOS/Windows 只能开发与验证 SOCKS5/HTTP 模式。
 - 交叉编译需要 `cargo install cargo-zigbuild` 和对应 target。
 
 ## 构建与运行
