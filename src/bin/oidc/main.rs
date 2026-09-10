@@ -49,9 +49,38 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Server {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    host: String,
+    #[serde(default = "default_port")]
+    port: u16,
+    #[serde(default)]
+    username: String,
+    #[serde(default, rename = "passWord")]
+    password: String,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
 struct LocalConfig {
+    #[serde(default = "default_domain")]
     domain: String,
-    servers: Vec<serde_json::Value>,
+    #[serde(default)]
+    servers: Vec<Server>,
+}
+
+fn default_port() -> u16 {
+    6001
+}
+
+fn default_domain() -> String {
+    DOMAIN.to_string()
+}
+
+fn string_field(value: &serde_json::Value, key: &str) -> String {
+    value[key].as_str().unwrap_or_default().to_string()
 }
 
 fn fetch_config() -> Result<LocalConfig> {
@@ -98,15 +127,16 @@ fn fetch_config() -> Result<LocalConfig> {
     }
     eprintln!("OK");
 
-    let servers: Vec<serde_json::Value> = resp["serverlist"]["serverlist"]
+    let servers: Vec<Server> = resp["serverlist"]["serverlist"]
         .as_array()
-        .map(|sl| {
-            sl.iter()
-                .map(|s| {
-                    serde_json::json!({
-                        "name": s["name"], "host": s["serverName"], "port": s["serverPort"],
-                        "username": s["userName"], "passWord": s["passWord"],
-                    })
+        .map(|list| {
+            list.iter()
+                .map(|s| Server {
+                    name: string_field(s, "name"),
+                    host: string_field(s, "serverName"),
+                    port: s["serverPort"].as_u64().unwrap_or(6001) as u16,
+                    username: string_field(s, "userName"),
+                    password: string_field(s, "passWord"),
                 })
                 .collect()
         })
@@ -122,14 +152,7 @@ fn save_config(path: &std::path::Path, config: &LocalConfig) -> Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).context("create config dir")?;
     }
-    std::fs::write(
-        path,
-        serde_json::to_string_pretty(&serde_json::json!({
-            "domain": config.domain,
-            "servers": config.servers,
-        }))?,
-    )
-    .context("write config")?;
+    std::fs::write(path, serde_json::to_string_pretty(config)?).context("write config")?;
     eprintln!(
         "  Saved {} server(s) to {}",
         config.servers.len(),
@@ -145,13 +168,7 @@ fn load_config(path: &std::path::Path) -> Result<LocalConfig> {
             path.display()
         )
     })?;
-    let value: serde_json::Value = serde_json::from_str(&content).context("parse config")?;
-    let domain = value["domain"].as_str().unwrap_or(DOMAIN).to_string();
-    let servers = value["servers"]
-        .as_array()
-        .cloned()
-        .context("config missing servers array")?;
-    Ok(LocalConfig { domain, servers })
+    serde_json::from_str(&content).context("parse config")
 }
 
 fn connect_server(cli: &cli::Cli, config: &LocalConfig) -> Result<()> {
@@ -162,19 +179,18 @@ fn connect_server(cli: &cli::Cli, config: &LocalConfig) -> Result<()> {
     let dns = iwan::core::socks::DnsResolver::parse(&cli.dns)
         .with_context(|| format!("invalid --dns value {:?}", cli.dns))?;
     let srv = select_server(&config.servers, cli.server.as_deref())?;
-    let host = srv["host"].as_str().context("missing host")?;
-    let port = srv["port"].as_u64().unwrap_or(6001) as u16;
-    let srv_user = srv["username"].as_str().unwrap_or("");
-    let encrypted_pw = srv["passWord"].as_str().unwrap_or("");
-    let name = srv["name"].as_str().unwrap_or("");
+    anyhow::ensure!(!srv.host.is_empty(), "selected server has no host");
 
-    let password = gcm::decrypt_password(encrypted_pw, APP_SECRET, &config.domain, srv_user);
-    eprintln!("\n  Connecting to {name} ({host}:{port})...");
+    let password = gcm::decrypt_password(&srv.password, APP_SECRET, &config.domain, &srv.username);
+    eprintln!(
+        "\n  Connecting to {} ({}:{})...",
+        srv.name, srv.host, srv.port
+    );
 
-    let ct = auth::get_ct(srv_user, &password, None)?;
+    let ct = auth::get_ct(&srv.username, &password, None)?;
     let nonce = auth::rand_u32()?;
-    let open = auth::build_open(srv_user, &ct, 1400, cli.encrypt, nonce);
-    let sock = auth::udp_connect(host, port, 3000)?;
+    let open = auth::build_open(&srv.username, &ct, 1400, cli.encrypt, nonce);
+    let sock = auth::udp_connect(&srv.host, srv.port, 3000)?;
 
     let auth_result = {
         let mut result = None;
@@ -204,10 +220,10 @@ fn connect_server(cli: &cli::Cli, config: &LocalConfig) -> Result<()> {
         auth_result.tun, auth_result.gw, auth_result.dns, auth_result.mtu
     );
 
-    let sk = crypto::session_key(srv_user, &password);
+    let sk = crypto::session_key(&srv.username, &password);
     let xk: Vec<u8> = sk[..8].to_vec();
 
-    if socks_mode(cli) {
+    if cli.socks {
         return run_socks(cli, &sock, &xk, &auth_result, dns);
     }
 
@@ -230,7 +246,7 @@ fn connect_server(cli: &cli::Cli, config: &LocalConfig) -> Result<()> {
             auth_result.sid,
             auth_result.tok,
             cli.encrypt,
-            host,
+            &srv.host,
             &route_targets,
             &auth_result.tun,
             auth_result.mtu,
@@ -242,10 +258,6 @@ fn connect_server(cli: &cli::Cli, config: &LocalConfig) -> Result<()> {
 
     #[cfg(not(target_os = "linux"))]
     unreachable!("non-Linux builds always use SOCKS5")
-}
-
-fn socks_mode(cli: &cli::Cli) -> bool {
-    cli.socks
 }
 
 #[cfg(target_os = "linux")]
@@ -342,22 +354,13 @@ fn passwd_home(user: &str) -> Option<PathBuf> {
     line.split(':').nth(5).map(PathBuf::from)
 }
 
-fn print_servers(servers: &[serde_json::Value]) {
+fn print_servers(servers: &[Server]) {
     for (idx, s) in servers.iter().enumerate() {
-        println!(
-            "{:>2}. {:30} {}:{}",
-            idx + 1,
-            s["name"].as_str().unwrap_or(""),
-            s["host"].as_str().unwrap_or(""),
-            s["port"].as_u64().unwrap_or(0)
-        );
+        println!("{:>2}. {:30} {}:{}", idx + 1, s.name, s.host, s.port);
     }
 }
 
-fn select_server<'a>(
-    servers: &'a [serde_json::Value],
-    choice: Option<&str>,
-) -> Result<&'a serde_json::Value> {
+fn select_server<'a>(servers: &'a [Server], choice: Option<&str>) -> Result<&'a Server> {
     if let Some(choice) = choice {
         if let Ok(index) = choice.parse::<usize>() {
             return index
@@ -367,7 +370,7 @@ fn select_server<'a>(
         }
         return servers
             .iter()
-            .find(|s| s["name"].as_str().unwrap_or("").contains(choice))
+            .find(|s| s.name.contains(choice))
             .with_context(|| format!("no server name contains \"{choice}\""));
     }
 
@@ -386,5 +389,50 @@ fn select_server<'a>(
             }
         }
         eprintln!("  invalid selection");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn server(name: &str, host: &str, port: u16) -> Server {
+        Server {
+            name: name.to_string(),
+            host: host.to_string(),
+            port,
+            username: "user".to_string(),
+            password: "cipher".to_string(),
+        }
+    }
+
+    #[test]
+    fn config_round_trips_existing_format() {
+        let json = r#"{
+            "domain": "iwan.ustc",
+            "servers": [
+                {"name": "教育网线路", "host": "1.2.3.4", "port": 6001,
+                 "username": "user", "passWord": "cipher"}
+            ]
+        }"#;
+        let config: LocalConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.domain, "iwan.ustc");
+        assert_eq!(config.servers[0].port, 6001);
+
+        let saved = serde_json::to_value(&config).unwrap();
+        assert_eq!(saved["servers"][0]["passWord"], "cipher");
+        assert_eq!(saved["servers"][0]["host"], "1.2.3.4");
+    }
+
+    #[test]
+    fn select_server_matches_index_and_name() {
+        let servers = vec![
+            server("教育网线路", "a", 6001),
+            server("电信线路", "b", 6002),
+        ];
+        assert_eq!(select_server(&servers, Some("2")).unwrap().host, "b");
+        assert_eq!(select_server(&servers, Some("电信")).unwrap().port, 6002);
+        assert!(select_server(&servers, Some("移动")).is_err());
+        assert!(select_server(&servers, Some("3")).is_err());
     }
 }
