@@ -83,10 +83,16 @@ release: rebuild iwan unified client
 
 ## Pull Request
 
-1. Fork 仓库，从 `main` 创建功能分支（如 `feat/server-selection`）。
-2. 在分支上完成修改，确保「提交前检查」全部通过。
-3. 向 `main` 发起 PR，描述动机、改动内容和验证方式；涉及 CLI/配置变更时同步更新 README。
-4. 维护者会以 merge commit 方式合入；合入后请勿复用或 force-push 已合并的分支。
+1. **先提交 issue 讨论**：在动手前先创建 issue 说明需求与方案，达成一致后再开发，避免返工。
+2. Fork 仓库，从 `main` 创建功能分支（如 `feat/server-selection`）。
+3. 在分支上完成修改，确保「提交前检查」全部通过。
+4. 向 `main` 发起 PR，描述动机、改动内容和验证方式；涉及 CLI/配置变更时同步更新 README。
+5. 维护者会以 merge commit 方式合入；合入后请勿复用或 force-push 已合并的分支。
+
+不接受的内容：
+
+- 与 USTC iWAN 官方客户端已有能力重复的功能（例如 Windows 上使用 WinTUN 建立 TUN）。
+- 本项目是官方程序的**补充**而非**替代**，不追求复刻或取代官方客户端。
 
 ## 不要提交的内容
 

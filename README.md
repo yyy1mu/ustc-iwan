@@ -269,6 +269,16 @@ echo 1 | sudo tee /proc/sys/net/ipv4/ip_forward
 sudo iptables -t nat -A POSTROUTING -s 198.18.0.0/16 -o eth0 -j MASQUERADE
 ```
 
+## 参与贡献
+
+欢迎反馈与贡献，但请遵守以下约定：
+
+- **先讨论再提交**：提交 Pull Request 前，请先创建 issue 说明需求与方案，达成一致后再动手。
+- **不接受与官方程序重复的功能**：USTC iWAN 官方客户端已有的能力（例如 Windows 上使用 WinTUN 建立 TUN）不再重复实现。
+- **补充而非替代**：本项目是官方程序的轻量补充（命令行、免 root 代理），不追求复刻或取代官方客户端。
+
+详细开发规范见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+
 ## 免责声明
 
 本项目仅供学习、研究和合法授权访问使用。使用者应自行确认其使用方式符合所在网络和服务的规则。
