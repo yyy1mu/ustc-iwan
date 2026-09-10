@@ -695,6 +695,9 @@ fn open_remote(
             next_port,
             allocated_ports,
         );
+    } else if host.contains(':') {
+        // IPv6 literal: the userspace stack is IPv4-only.
+        queue_proxy_error(flow, ProxyError::AddressNotSupported);
     } else {
         flow.set_state(LocalState::Resolving);
         spawn_ipv4_query(id, host.to_string(), port, dns.clone(), dns_tx.clone());
@@ -920,7 +923,10 @@ fn reap_flows(
                     sockets.get::<tcp::Socket>(handle).state() == tcp::State::Closed
                         && flow.output.is_empty()
                 }
-                None => matches!(flow.state, LocalState::Closing) && flow.output.is_empty(),
+                None => {
+                    (matches!(flow.state, LocalState::Closing) || flow.local_eof)
+                        && flow.output.is_empty()
+                }
             };
             removable.then_some(*id)
         })
@@ -1008,6 +1014,57 @@ mod tests {
         assert_eq!(packet[0] >> 4, 4);
         assert_eq!(packet[9], 6);
         assert_ne!(packet[20 + 13] & 0x02, 0);
+    }
+
+    #[test]
+    fn reaps_socket_less_flows_after_local_eof() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let mut flow = LocalFlow::new(client, ProxyProtocol::Http).unwrap();
+        // Client hangs up before the request head completes.
+        flow.local_eof = true;
+
+        let mut flows = HashMap::new();
+        flows.insert(7u64, flow);
+        let mut sockets = SocketSet::new(vec![]);
+        let mut allocated_ports = HashSet::new();
+        reap_flows(&mut flows, &mut sockets, &mut allocated_ports);
+        assert!(flows.is_empty());
+    }
+
+    #[test]
+    fn rejects_ipv6_literal_targets() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let mut flow = LocalFlow::new(client, ProxyProtocol::Http).unwrap();
+
+        let mut device = IpTunnelDevice::new(1380);
+        let mut config = Config::new(HardwareAddress::Ip);
+        config.random_seed = 1;
+        let mut iface = Interface::new(config, &mut device, Instant::from_millis(0));
+        let mut sockets = SocketSet::new(vec![]);
+        let dns = DnsResolver::parse("114.114.114.114:53").unwrap();
+        let (dns_tx, _dns_rx) = mpsc::channel();
+        let mut next_port = 49152u16;
+        let mut allocated_ports = HashSet::new();
+
+        open_remote(
+            1,
+            &mut flow,
+            &mut sockets,
+            &mut iface,
+            Ipv4Addr::new(10, 8, 0, 2),
+            "2001:db8::1",
+            443,
+            &dns,
+            &mut next_port,
+            &mut allocated_ports,
+            &dns_tx,
+        );
+
+        assert!(matches!(flow.state, LocalState::Closing));
+        let reply = String::from_utf8_lossy(flow.output.make_contiguous()).to_string();
+        assert!(reply.starts_with("HTTP/1.1 501"), "{reply}");
     }
 
     #[test]
