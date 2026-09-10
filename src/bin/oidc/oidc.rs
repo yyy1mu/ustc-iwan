@@ -16,11 +16,7 @@ pub fn run(agent: &ureq::Agent) -> Result<(String, String)> {
     let code_challenge = gcm::b64url_no_pad(&crypto::sha256(code_verifier.as_bytes()));
     let state = rand_alphanum(32);
 
-    let params = format!(
-        "client_id={CLIENT_ID}&redirect_uri={REDIRECT}&response_type=code&\
-         scope={SCOPE}&code_challenge={code_challenge}&code_challenge_method=S256&state={state}"
-    );
-    let auth_url = format!("{AUTH_URL}?{params}");
+    let auth_url = authorization_url(&code_challenge, &state)?;
 
     eprintln!("  Open in browser:\n  {auth_url}\n");
     let redirect = read_line("  Paste redirect URL: ");
@@ -69,6 +65,19 @@ pub fn run(agent: &ureq::Agent) -> Result<(String, String)> {
     Ok((kp, username))
 }
 
+fn authorization_url(code_challenge: &str, state: &str) -> Result<String> {
+    let mut url = url::Url::parse(AUTH_URL).context("invalid authorization URL")?;
+    url.query_pairs_mut()
+        .append_pair("client_id", CLIENT_ID)
+        .append_pair("redirect_uri", REDIRECT)
+        .append_pair("response_type", "code")
+        .append_pair("scope", SCOPE)
+        .append_pair("code_challenge", code_challenge)
+        .append_pair("code_challenge_method", "S256")
+        .append_pair("state", state);
+    Ok(url.into())
+}
+
 fn rand_alphanum(len: usize) -> String {
     const CS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     let mut r = rand::thread_rng();
@@ -103,5 +112,22 @@ pub(crate) fn http_post_json(
             serde_json::Value::String(r.into_string().unwrap_or_default()),
         )),
         Err(e) => anyhow::bail!("HTTP error: {e}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn authorization_url_encodes_query_parameters() {
+        let url = authorization_url("challenge+/=", "state 1").unwrap();
+        assert!(url.starts_with(&format!("{AUTH_URL}?")));
+        assert!(url.contains("client_id=afc6479ffb531d71daef"));
+        assert!(url.contains("redirect_uri=com.panabit.mobile%3A%2F%2Foauth2redirect"));
+        assert!(url.contains("scope=openid+profile+email+offline_access"));
+        assert!(url.contains("code_challenge=challenge%2B%2F%3D"));
+        assert!(url.contains("code_challenge_method=S256"));
+        assert!(url.contains("state=state+1"));
     }
 }
