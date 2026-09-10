@@ -35,10 +35,10 @@ TCP/IPv4 数据包，不创建网卡、不修改系统路由，也不需要 root
 
 常用文件：
 
-- `iwan-client-oidc-aarch64-musl`
-- `iwan-client-oidc-x86_64-musl`
-- `iwan-client-aarch64-musl`
-- `iwan-client-x86_64-musl`
+- `iwan-client-oidc-linux-aarch64-musl`
+- `iwan-client-oidc-linux-x86_64-musl`
+- `iwan-client-linux-aarch64-musl`
+- `iwan-client-linux-x86_64-musl`
 - `iwan-client-oidc-macos-aarch64`
 - `iwan-client-oidc-macos-x86_64`
 - `iwan-client-oidc-windows-aarch64.exe`

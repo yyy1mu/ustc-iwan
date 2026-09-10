@@ -15,29 +15,29 @@ jobs:
       matrix:
         include:
           # ── iwan-client ──────────────────────────────
-          - { binary: iwan-client, target: x86_64-unknown-linux-gnu,   suffix: x86_64-gnu }
-          - { binary: iwan-client, target: x86_64-unknown-linux-musl,  suffix: x86_64-musl }
-          - { binary: iwan-client, target: aarch64-unknown-linux-gnu,  suffix: aarch64-gnu }
-          - { binary: iwan-client, target: aarch64-unknown-linux-musl, suffix: aarch64-musl }
-          - { binary: iwan-client, target: armv7-unknown-linux-gnueabihf, suffix: armv7-gnu }
-          - { binary: iwan-client, target: armv7-unknown-linux-musleabihf, suffix: armv7-musl }
-          - { binary: iwan-client, target: riscv64gc-unknown-linux-musl, suffix: riscv64-musl }
+          - { binary: iwan-client, target: x86_64-unknown-linux-gnu,   suffix: linux-x86_64-gnu }
+          - { binary: iwan-client, target: x86_64-unknown-linux-musl,  suffix: linux-x86_64-musl }
+          - { binary: iwan-client, target: aarch64-unknown-linux-gnu,  suffix: linux-aarch64-gnu }
+          - { binary: iwan-client, target: aarch64-unknown-linux-musl, suffix: linux-aarch64-musl }
+          - { binary: iwan-client, target: armv7-unknown-linux-gnueabihf, suffix: linux-armv7-gnu }
+          - { binary: iwan-client, target: armv7-unknown-linux-musleabihf, suffix: linux-armv7-musl }
+          - { binary: iwan-client, target: riscv64gc-unknown-linux-musl, suffix: linux-riscv64-musl }
           # ── iwan-client-oidc ───────────────────────
-          - { binary: iwan-client-oidc, target: x86_64-unknown-linux-gnu,   suffix: x86_64-gnu }
-          - { binary: iwan-client-oidc, target: x86_64-unknown-linux-musl,  suffix: x86_64-musl }
-          - { binary: iwan-client-oidc, target: aarch64-unknown-linux-gnu,  suffix: aarch64-gnu }
-          - { binary: iwan-client-oidc, target: aarch64-unknown-linux-musl, suffix: aarch64-musl }
-          - { binary: iwan-client-oidc, target: armv7-unknown-linux-gnueabihf, suffix: armv7-gnu }
-          - { binary: iwan-client-oidc, target: armv7-unknown-linux-musleabihf, suffix: armv7-musl }
-          - { binary: iwan-client-oidc, target: riscv64gc-unknown-linux-musl, suffix: riscv64-musl }
+          - { binary: iwan-client-oidc, target: x86_64-unknown-linux-gnu,   suffix: linux-x86_64-gnu }
+          - { binary: iwan-client-oidc, target: x86_64-unknown-linux-musl,  suffix: linux-x86_64-musl }
+          - { binary: iwan-client-oidc, target: aarch64-unknown-linux-gnu,  suffix: linux-aarch64-gnu }
+          - { binary: iwan-client-oidc, target: aarch64-unknown-linux-musl, suffix: linux-aarch64-musl }
+          - { binary: iwan-client-oidc, target: armv7-unknown-linux-gnueabihf, suffix: linux-armv7-gnu }
+          - { binary: iwan-client-oidc, target: armv7-unknown-linux-musleabihf, suffix: linux-armv7-musl }
+          - { binary: iwan-client-oidc, target: riscv64gc-unknown-linux-musl, suffix: linux-riscv64-musl }
           # ── iwan-server ──────────────────────────
-          - { binary: iwan-server, target: x86_64-unknown-linux-gnu,   suffix: x86_64-gnu }
-          - { binary: iwan-server, target: x86_64-unknown-linux-musl,  suffix: x86_64-musl }
-          - { binary: iwan-server, target: aarch64-unknown-linux-gnu,  suffix: aarch64-gnu }
-          - { binary: iwan-server, target: aarch64-unknown-linux-musl, suffix: aarch64-musl }
-          - { binary: iwan-server, target: armv7-unknown-linux-gnueabihf, suffix: armv7-gnu }
-          - { binary: iwan-server, target: armv7-unknown-linux-musleabihf, suffix: armv7-musl }
-          - { binary: iwan-server, target: riscv64gc-unknown-linux-musl, suffix: riscv64-musl }
+          - { binary: iwan-server, target: x86_64-unknown-linux-gnu,   suffix: linux-x86_64-gnu }
+          - { binary: iwan-server, target: x86_64-unknown-linux-musl,  suffix: linux-x86_64-musl }
+          - { binary: iwan-server, target: aarch64-unknown-linux-gnu,  suffix: linux-aarch64-gnu }
+          - { binary: iwan-server, target: aarch64-unknown-linux-musl, suffix: linux-aarch64-musl }
+          - { binary: iwan-server, target: armv7-unknown-linux-gnueabihf, suffix: linux-armv7-gnu }
+          - { binary: iwan-server, target: armv7-unknown-linux-musleabihf, suffix: linux-armv7-musl }
+          - { binary: iwan-server, target: riscv64gc-unknown-linux-musl, suffix: linux-riscv64-musl }
 
     steps:
       - name: Checkout
