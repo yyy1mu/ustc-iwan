@@ -2,8 +2,8 @@ use crate::cli;
 use anyhow::{Context, Result};
 use iwan::core::{auth, crypto, proxy, tun};
 use std::net::UdpSocket;
-use std::time::Duration;
 use std::os::fd::AsRawFd;
+use std::time::Duration;
 
 pub fn run(args: &cli::ProxyArgs, nonce: u32, open: Vec<u8>) -> Result<()> {
     let addr: std::net::SocketAddr = format!("{}:{}", args.server, args.port)

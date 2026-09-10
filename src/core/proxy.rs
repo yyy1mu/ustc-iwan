@@ -1,8 +1,8 @@
 use super::{crypto, protocol, route, tun};
 use anyhow::{Context, Result};
 use std::net::{ToSocketAddrs, UdpSocket};
-use std::os::fd::RawFd;
 use std::os::fd::AsRawFd;
+use std::os::fd::RawFd;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -72,28 +72,34 @@ pub fn run_pump(
         const BATCH: usize = 64;
         const SLOT: usize = 2048;
         let mut buf_slots = vec![0u8; BATCH * SLOT];
-        let mut iov:  [libc::iovec; BATCH]     = unsafe { std::mem::zeroed() };
-        let mut mmsg: [libc::mmsghdr; BATCH]   = unsafe { std::mem::zeroed() };
+        let mut iov: [libc::iovec; BATCH] = unsafe { std::mem::zeroed() };
+        let mut mmsg: [libc::mmsghdr; BATCH] = unsafe { std::mem::zeroed() };
         let hdr = protocol::pkhdr(protocol::PT_DATA_ENC, enc, sid, tok);
 
         for i in 0..BATCH {
             buf_slots[i * SLOT..i * SLOT + 8].copy_from_slice(&hdr);
             iov[i] = libc::iovec {
                 iov_base: buf_slots[i * SLOT..].as_mut_ptr() as *mut _,
-                iov_len:  0,
+                iov_len: 0,
             };
-            mmsg[i].msg_hdr.msg_iov    = &mut iov[i];
+            mmsg[i].msg_hdr.msg_iov = &mut iov[i];
             mmsg[i].msg_hdr.msg_iovlen = 1;
         }
 
-        let mut pfd = libc::pollfd { fd: tun_fd, events: libc::POLLIN, revents: 0 };
+        let mut pfd = libc::pollfd {
+            fd: tun_fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
         let mut cnt = 0usize;
 
         if super::util::debug_enabled() {
             eprintln!("[TUN→UDP] started");
         }
         loop {
-            if !r1.load(Ordering::Relaxed) { break; }
+            if !r1.load(Ordering::Relaxed) {
+                break;
+            }
 
             let s = &mut buf_slots[cnt * SLOT + 8..(cnt + 1) * SLOT];
             let n = tun::tun_read(tun_fd, s);
@@ -113,7 +119,10 @@ pub fn run_pump(
                         unsafe { libc::poll(&mut pfd, 1, 200) };
                     }
                     std::io::ErrorKind::Interrupted => {}
-                    _ => { r1.store(false, Ordering::Relaxed); break; }
+                    _ => {
+                        r1.store(false, Ordering::Relaxed);
+                        break;
+                    }
                 }
             } else {
                 r1.store(false, Ordering::Relaxed);
@@ -131,14 +140,10 @@ pub fn run_pump(
         let mut last_keepalive = Instant::now()
             .checked_sub(KEEPALIVE_INTERVAL)
             .unwrap_or_else(Instant::now);
-        let keepalive_pkt = protocol::ctrl_pkt(
-            &protocol::pkhdr(protocol::PT_ECHO_REQ, enc, sid, tok),
-            &[],
-        );
-        let echo_res_pkt = protocol::ctrl_pkt(
-            &protocol::pkhdr(protocol::PT_ECHO_RES, enc, sid, tok),
-            &[],
-        );
+        let keepalive_pkt =
+            protocol::ctrl_pkt(&protocol::pkhdr(protocol::PT_ECHO_REQ, enc, sid, tok), &[]);
+        let echo_res_pkt =
+            protocol::ctrl_pkt(&protocol::pkhdr(protocol::PT_ECHO_RES, enc, sid, tok), &[]);
         if super::util::debug_enabled() {
             eprintln!("[UDP→TUN] started");
         }
@@ -220,9 +225,7 @@ pub fn run_pump(
 fn flush(mmsg: &mut [libc::mmsghdr], cnt: usize, fd: std::os::fd::RawFd) -> usize {
     let mut off = 0usize;
     while off < cnt {
-        let sent = unsafe {
-            libc::sendmmsg(fd, mmsg.as_mut_ptr().add(off), (cnt - off) as _, 0)
-        };
+        let sent = unsafe { libc::sendmmsg(fd, mmsg.as_mut_ptr().add(off), (cnt - off) as _, 0) };
         if sent < 0 {
             if std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
                 continue;
