@@ -363,14 +363,12 @@ fn select_server<'a>(
             return index
                 .checked_sub(1)
                 .and_then(|i| servers.get(i))
-                .with_context(|| format!("server index {index} out of range 1-{}", servers.len()))
-                .map(|s| s);
+                .with_context(|| format!("server index {index} out of range 1-{}", servers.len()));
         }
         return servers
             .iter()
             .find(|s| s["name"].as_str().unwrap_or("").contains(choice))
-            .with_context(|| format!("no server name contains \"{choice}\""))
-            .map(|s| s);
+            .with_context(|| format!("no server name contains \"{choice}\""));
     }
 
     loop {
