@@ -82,10 +82,39 @@ pub fn udp_connect(host: &str, port: u16, timeout_ms: u64) -> Result<std::net::U
         .context("invalid address")?;
     let s = std::net::UdpSocket::bind("0.0.0.0:0").context("bind UDP")?;
     s.connect(a).context("connect UDP")?;
+    enlarge_udp_buffers(&s);
     s.set_read_timeout(Some(Duration::from_millis(timeout_ms)))
         .ok();
     Ok(s)
 }
+
+#[cfg(unix)]
+fn enlarge_udp_buffers(sock: &std::net::UdpSocket) {
+    use std::os::fd::AsRawFd;
+
+    const UDP_BUFFER_SIZE: libc::c_int = 16 * 1024 * 1024;
+    let fd = sock.as_raw_fd();
+    let size = UDP_BUFFER_SIZE;
+    unsafe {
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_RCVBUF,
+            &size as *const _ as *const libc::c_void,
+            std::mem::size_of_val(&size) as libc::socklen_t,
+        );
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_SNDBUF,
+            &size as *const _ as *const libc::c_void,
+            std::mem::size_of_val(&size) as libc::socklen_t,
+        );
+    }
+}
+
+#[cfg(not(unix))]
+fn enlarge_udp_buffers(_sock: &std::net::UdpSocket) {}
 
 pub fn rand_u32() -> Result<u32> {
     Ok(rand::random())

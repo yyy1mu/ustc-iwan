@@ -1,40 +1,10 @@
 use crate::cli;
 use anyhow::{Context, Result};
 use iwan::core::{auth, crypto, proxy, tun};
-use std::net::UdpSocket;
-use std::os::fd::AsRawFd;
 use std::time::Duration;
 
 pub fn run(args: &cli::ProxyArgs, nonce: u32, open: Vec<u8>) -> Result<()> {
-    let addr: std::net::SocketAddr = format!("{}:{}", args.server, args.port)
-        .parse()
-        .context("invalid address")?;
-    let sock = UdpSocket::bind("0.0.0.0:0").context("bind UDP")?;
-    sock.connect(addr).context("connect UDP")?;
-
-    // Larger UDP buffers
-    {
-        const BUFSZ: libc::c_int = 16 * 1024 * 1024;
-        let fd = sock.as_raw_fd();
-        unsafe {
-            libc::setsockopt(
-                fd,
-                libc::SOL_SOCKET,
-                libc::SO_RCVBUF,
-                &BUFSZ as *const _ as *const libc::c_void,
-                std::mem::size_of_val(&BUFSZ) as libc::socklen_t,
-            );
-            libc::setsockopt(
-                fd,
-                libc::SOL_SOCKET,
-                libc::SO_SNDBUF,
-                &BUFSZ as *const _ as *const libc::c_void,
-                std::mem::size_of_val(&BUFSZ) as libc::socklen_t,
-            );
-        }
-    }
-    sock.set_read_timeout(Some(Duration::from_millis(3000)))
-        .ok();
+    let sock = auth::udp_connect(&args.server, args.port, 3000)?;
 
     let auth = {
         let mut result = None;
