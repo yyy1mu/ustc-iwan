@@ -130,7 +130,7 @@ macOS（无 TUN，仅支持 SOCKS5/HTTP）：
 ```bash
 ./iwan-client-oidc-macos-aarch64 --connect --socks \
   --socks-listen 127.0.0.1:1080 \
-  --socks-mtu 1380
+  --proxy-mtu 1380
 ```
 
 Intel Mac 请将文件名替换为 `iwan-client-oidc-macos-x86_64`。
@@ -140,7 +140,7 @@ Windows PowerShell（无 TUN，仅支持 SOCKS5/HTTP）：
 ```powershell
 .\iwan-client-oidc-windows-x86_64.exe --connect --socks `
   --socks-listen 127.0.0.1:1080 `
-  --socks-mtu 1380
+  --proxy-mtu 1380
 ```
 
 Windows ARM64 请将文件名替换为
@@ -148,7 +148,7 @@ Windows ARM64 请将文件名替换为
 
 三个平台均使用 `--socks` 显式启用 SOCKS5 模式。默认监听
 `127.0.0.1:1080`，默认用户态内层 MTU 为 `1380`，可以通过
-`--socks-listen` 和 `--socks-mtu` 修改这两个值。
+`--socks-listen` 和 `--proxy-mtu` 修改这两个值。
 
 当前 SOCKS5 模式支持 `CONNECT`、IPv4 地址目标和域名目标。域名由客户端
 在本机解析为 IPv4 地址，默认使用 `114.114.114.114:53`，可以通过
@@ -188,7 +188,7 @@ macOS/Windows 示例：
 ```
 
 默认监听 `127.0.0.1:8080`，可用 `--http-listen` 修改；内层 MTU 与 SOCKS5
-共用 `--socks-mtu`，域名解析同样使用 `--dns`。`--socks` 与 `--http` 互斥。
+共用 `--proxy-mtu`（旧名 `--socks-mtu` 仍可用），域名解析同样使用 `--dns`。`--socks` 与 `--http` 互斥。
 
 支持两种请求：
 
@@ -239,6 +239,7 @@ sudo ./iwan-client-oidc --connect \
 | `--proxy-domain` | 连接前解析域名，并把解析得到的 IPv4 地址加入路由。 |
 | `--proxy-cidr` | 指定 CIDR 网段，例如 `10.0.0.0/8` 或 `0.0.0.0/0`。 |
 | `--tun` | TUN 设备名，默认 `iwan0`。 |
+| `--tun-mtu` | 握手协商的 MTU，同时设置到 TUN 设备，默认 `1400`，上限 `2040`（仅 Linux）。 |
 | `--encrypt` | 协议加密模式，默认 `1`。 |
 
 代理参数可以重复，也可以用逗号分隔：
@@ -255,6 +256,17 @@ sudo ./iwan-client-oidc --connect --proxy-cidr 0.0.0.0/0
 ```
 
 注意：域名只在连接时解析一次。连接后域名解析变化不会自动同步到路由表。
+
+## MTU 说明
+
+| 选项 | 适用模式 | 默认 | 作用 |
+|------|----------|------|------|
+| `--tun-mtu`（oidc）/ `--mtu`（`iwan-client proxy`） | TUN | 1400 | 握手时上报的 MTU，服务器确认后设置到 TUN 设备。上限 2040（客户端上行批量发送槽为 2048 字节）。 |
+| `--proxy-mtu`（oidc，旧名 `--socks-mtu`）/ `--mtu`（`iwan-client socks/http`） | SOCKS5/HTTP | 1380 | 用户态 TCP/IP 栈的内层 MTU，决定发出的包长；超过该长度的下行包会被丢弃。实际取与服务器确认值的较小者。 |
+| `--mtu`（`iwan-server`） | 服务端 | 1400 | 服务端 TUN 设备的 MTU，应不小于客户端上报值，避免下行包被丢弃。 |
+
+TUN 模式默认 1400、用户态模式默认 1380：后者需要为外层 IP+UDP 及协议头预留空间，
+且不依赖内核路由，取更保守的值。
 
 ## OIDC 命令参数
 
@@ -352,6 +364,7 @@ cargo zigbuild --bin iwan-client --target aarch64-unknown-linux-gnu.2.17 --relea
 sudo ./iwan-server \
   --port 6001 \
   --tun iwan-srv \
+  --mtu 1400 \
   --server-ip 198.18.0.1 \
   --subnet 198.18.0.0/16 \
   --dns 114.114.114.114 \
