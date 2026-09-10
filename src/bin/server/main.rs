@@ -1,4 +1,3 @@
-#[cfg(target_os = "linux")]
 mod cli;
 #[cfg(target_os = "linux")]
 mod handler;
@@ -7,7 +6,6 @@ mod session;
 
 #[cfg(target_os = "linux")]
 use anyhow::{Context, Result};
-#[cfg(target_os = "linux")]
 use clap::Parser;
 #[cfg(target_os = "linux")]
 use iwan::core::tun;
@@ -96,6 +94,8 @@ fn main() -> Result<()> {
 
 #[cfg(not(target_os = "linux"))]
 fn main() {
+    // Parse first so --help and --version work on every platform.
+    let _ = cli::Cli::parse();
     eprintln!("iwan-server is only supported on Linux");
     std::process::exit(1);
 }
