@@ -192,7 +192,11 @@ fn connect_server(cli: &cli::Cli, config: &LocalConfig) -> Result<()> {
 
     let ct = auth::get_ct(&srv.username, &password, None)?;
     let nonce = auth::rand_u32()?;
-    let open = auth::build_open(&srv.username, &ct, 1400, cli.encrypt, nonce);
+    #[cfg(target_os = "linux")]
+    let open_mtu = cli.tun_mtu;
+    #[cfg(not(target_os = "linux"))]
+    let open_mtu = 1400u16;
+    let open = auth::build_open(&srv.username, &ct, open_mtu, cli.encrypt, nonce);
     let sock = auth::udp_connect(&srv.host, srv.port, 3000)?;
 
     let auth_result = {
@@ -305,7 +309,7 @@ fn run_local_proxy(
             protocol,
             inner_ip,
             gateway,
-            mtu: usize::from(auth_result.mtu.min(cli.socks_mtu)),
+            mtu: usize::from(auth_result.mtu.min(cli.proxy_mtu)),
             xor_key,
             sid: auth_result.sid,
             token: auth_result.tok,

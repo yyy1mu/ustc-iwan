@@ -36,6 +36,11 @@ pub struct Cli {
     #[arg(long, default_value = "iwan0")]
     pub tun: String,
 
+    /// MTU advertised during the handshake and set on the TUN device.
+    #[cfg(target_os = "linux")]
+    #[arg(long, default_value = "1400")]
+    pub tun_mtu: u16,
+
     /// CIDR ranges to route through the tunnel. Can be repeated or comma-separated.
     #[cfg(target_os = "linux")]
     #[arg(long, value_delimiter = ',')]
@@ -64,8 +69,8 @@ pub struct Cli {
     pub socks_listen: std::net::SocketAddr,
 
     /// Maximum userspace inner IP MTU for --socks or --http.
-    #[arg(long, default_value = "1380")]
-    pub socks_mtu: u16,
+    #[arg(long, default_value = "1380", visible_alias = "socks-mtu")]
+    pub proxy_mtu: u16,
 
     /// Use a rootless userspace HTTP proxy instead of a TUN device.
     #[arg(long)]
