@@ -22,6 +22,10 @@ pub struct Cli {
     #[arg(long)]
     pub connect: bool,
 
+    /// Server to connect to: name keyword or 1-based index. Skips interactive selection.
+    #[arg(long)]
+    pub server: Option<String>,
+
     /// Fetch config, print servers, choose one, and connect.
     #[arg(long)]
     pub all: bool,
@@ -62,4 +66,8 @@ pub struct Cli {
     /// Maximum userspace inner IP MTU.
     #[arg(long, default_value = "1380")]
     pub socks_mtu: u16,
+
+    /// DNS resolver for SOCKS5 domain requests: ip[:port], tls://host[:port] or https://url.
+    #[arg(long, default_value = "114.114.114.114:53")]
+    pub dns: String,
 }

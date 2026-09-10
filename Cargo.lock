@@ -526,12 +526,14 @@ dependencies = [
  "libc",
  "md-5",
  "rand",
+ "rustls",
  "serde",
  "serde_json",
  "sha2",
  "smoltcp",
  "ureq",
  "url",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]
