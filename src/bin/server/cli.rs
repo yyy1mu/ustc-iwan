@@ -8,6 +8,8 @@ pub struct Cli {
     pub port: u16,
     #[arg(long, default_value = "iwan-srv")]
     pub tun: String,
+    #[arg(long, default_value = "1400")]
+    pub mtu: u16,
     #[arg(long, default_value = "198.18.0.1")]
     pub server_ip: std::net::Ipv4Addr,
     #[arg(long, default_value = "198.18.0.0/16")]

@@ -172,6 +172,7 @@ fn configure_tun(cli: &cli::Cli, prefix: u8) {
     use iwan::core::util::ip_run;
     let _ = ip_run(&["addr", "flush", "dev", &cli.tun]);
     ip_run(&["link", "set", &cli.tun, "up"]);
+    ip_run(&["link", "set", "dev", &cli.tun, "mtu", &cli.mtu.to_string()]);
     ip_run(&[
         "addr",
         "add",
