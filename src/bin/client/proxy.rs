@@ -45,19 +45,19 @@ pub fn run(args: &cli::ProxyArgs, nonce: u32, open: Vec<u8>) -> Result<()> {
     tun::set_nonblock(tun_fd);
     println!("tun {} fd={}", args.tun, tun_fd);
 
-    proxy::run_pump(
+    proxy::run_pump(proxy::PumpConfig {
         tun_fd,
-        &args.tun,
-        &sock,
-        &xk,
-        auth.sid,
-        auth.tok,
-        args.encrypt,
-        &args.server,
-        &route_targets,
-        &auth.tun,
-        auth.mtu,
-    )?;
+        tun_name: &args.tun,
+        sock: &sock,
+        xor_key: &xk,
+        sid: auth.sid,
+        token: auth.tok,
+        encryption: args.encrypt,
+        server: &args.server,
+        route_targets: &route_targets,
+        tun_ip: &auth.tun,
+        mtu: auth.mtu,
+    })?;
 
     tun::tun_close(tun_fd);
     println!("done.");

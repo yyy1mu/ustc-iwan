@@ -238,19 +238,19 @@ fn connect_server(cli: &cli::Cli, config: &LocalConfig) -> Result<()> {
 
         let route_targets = route_targets(cli);
 
-        proxy::run_pump(
+        proxy::run_pump(proxy::PumpConfig {
             tun_fd,
-            &cli.tun,
-            &sock,
-            &xk,
-            auth_result.sid,
-            auth_result.tok,
-            cli.encrypt,
-            &srv.host,
-            &route_targets,
-            &auth_result.tun,
-            auth_result.mtu,
-        )?;
+            tun_name: &cli.tun,
+            sock: &sock,
+            xor_key: &xk,
+            sid: auth_result.sid,
+            token: auth_result.tok,
+            encryption: cli.encrypt,
+            server: &srv.host,
+            route_targets: &route_targets,
+            tun_ip: &auth_result.tun,
+            mtu: auth_result.mtu,
+        })?;
 
         tun::tun_close(tun_fd);
         Ok(())

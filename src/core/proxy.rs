@@ -9,20 +9,36 @@ use std::time::{Duration, Instant};
 
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
 
+/// Options for the TUN↔UDP data-plane pump.
+pub struct PumpConfig<'a> {
+    pub tun_fd: RawFd,
+    pub tun_name: &'a str,
+    pub sock: &'a UdpSocket,
+    pub xor_key: &'a [u8],
+    pub sid: u16,
+    pub token: u32,
+    pub encryption: u8,
+    pub server: &'a str,
+    pub route_targets: &'a [String],
+    pub tun_ip: &'a str,
+    pub mtu: u16,
+}
+
 /// Run the TUN↔UDP data-plane pump. Blocks until Ctrl-C or error.
-pub fn run_pump(
-    tun_fd: RawFd,
-    tun_name: &str,
-    sock: &UdpSocket,
-    xk: &[u8],
-    sid: u16,
-    tok: u32,
-    enc: u8,
-    server: &str,
-    route_targets: &[String],
-    auth_tun_ip: &str,
-    auth_mtu: u16,
-) -> Result<()> {
+pub fn run_pump(config: PumpConfig<'_>) -> Result<()> {
+    let PumpConfig {
+        tun_fd,
+        tun_name,
+        sock,
+        xor_key: xk,
+        sid,
+        token: tok,
+        encryption: enc,
+        server,
+        route_targets,
+        tun_ip: auth_tun_ip,
+        mtu: auth_mtu,
+    } = config;
     let (ogw, odev) = route::capture_default().context("cannot detect default route")?;
     if super::util::debug_enabled() {
         eprintln!("default route: via {ogw} dev {odev}");
