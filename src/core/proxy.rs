@@ -9,6 +9,11 @@ use std::time::{Duration, Instant};
 
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
 
+/// Upload batching: each TUN packet occupies one SLOT plus the 8-byte
+/// protocol header, so the negotiated MTU must satisfy mtu + 8 <= SLOT.
+const BATCH: usize = 64;
+const SLOT: usize = 2048;
+
 /// Options for the TUN↔UDP data-plane pump.
 pub struct PumpConfig<'a> {
     pub tun_fd: RawFd,
@@ -39,6 +44,12 @@ pub fn run_pump(config: PumpConfig<'_>) -> Result<()> {
         tun_ip: auth_tun_ip,
         mtu: auth_mtu,
     } = config;
+    anyhow::ensure!(
+        usize::from(auth_mtu) + 8 <= SLOT,
+        "TUN MTU {} exceeds the {}-byte upload slot limit",
+        auth_mtu,
+        SLOT - 8
+    );
     let (ogw, odev) = route::capture_default().context("cannot detect default route")?;
     if super::util::debug_enabled() {
         eprintln!("default route: via {ogw} dev {odev}");
@@ -85,8 +96,6 @@ pub fn run_pump(config: PumpConfig<'_>) -> Result<()> {
 
     let r1 = running.clone();
     let t1 = std::thread::spawn(move || {
-        const BATCH: usize = 64;
-        const SLOT: usize = 2048;
         let mut buf_slots = vec![0u8; BATCH * SLOT];
         let mut iov: [libc::iovec; BATCH] = unsafe { std::mem::zeroed() };
         let mut mmsg: [libc::mmsghdr; BATCH] = unsafe { std::mem::zeroed() };
