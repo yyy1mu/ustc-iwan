@@ -19,7 +19,7 @@ pub fn run(agent: &ureq::Agent) -> Result<(String, String)> {
     let auth_url = authorization_url(&code_challenge, &state)?;
 
     eprintln!("  Open in browser:\n  {auth_url}\n");
-    let redirect = read_line("  Paste redirect URL: ");
+    let redirect = read_line("  Paste redirect URL: ")?;
     let parsed = url::Url::parse(&redirect).context("invalid redirect URL")?;
     let query: std::collections::HashMap<String, String> = parsed
         .query_pairs()
@@ -86,12 +86,12 @@ fn rand_alphanum(len: usize) -> String {
         .collect()
 }
 
-fn read_line(prompt: &str) -> String {
+fn read_line(prompt: &str) -> Result<String> {
     print!("{prompt}");
     io::stdout().flush().ok();
     let mut line = String::new();
-    io::stdin().read_line(&mut line).unwrap();
-    line.trim().to_string()
+    io::stdin().read_line(&mut line).context("read input")?;
+    Ok(line.trim().to_string())
 }
 
 pub(crate) fn http_post_json(

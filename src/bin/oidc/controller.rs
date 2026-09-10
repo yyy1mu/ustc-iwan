@@ -16,13 +16,11 @@ pub fn post(
     body: &serde_json::Value,
     kp_token: &str,
 ) -> Result<(u16, serde_json::Value)> {
-    let ts = format!(
-        "{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
-    );
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .to_string();
     let nonce = nonce_hex();
     let bd = serde_json::to_vec(body)?;
     let canonical = format!(
