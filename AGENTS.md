@@ -6,7 +6,7 @@
 
 `ustc-iwan` 是 USTC iWAN 的 Rust 命令行客户端，通过统一身份认证（OIDC）获取线路配置，并用 Linux TUN 隧道或跨平台用户态 SOCKS5/HTTP 代理连接。
 
-- 语言/构建：Rust 2021（`Cargo.toml` 的 `version = "0.1.0"` 与发布版本无关，发布版本由 Git tag `v*` 决定）。
+- 语言/构建：Rust 2021（`Cargo.toml` 的 `version` 为日历版本，如 `26.9.0`，发版时需与 tag `v26.9.0` 同步修改；三个二进制的 `--version` 输出均来自该字段）。
 - 三个二进制：`iwan-client-oidc`（推荐）、`iwan-client`（手动参数/调试）、`iwan-server`（自建测试服务端，仅 Linux）。
 - 平台限制：TUN 模式仅 Linux 且需 root/CAP_NET_ADMIN；macOS/Windows 只有 SOCKS5/HTTP 模式。
 
