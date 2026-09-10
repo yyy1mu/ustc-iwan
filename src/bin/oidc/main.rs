@@ -171,7 +171,7 @@ fn connect_server(cli: &cli::Cli, config: &LocalConfig) -> Result<()> {
     let password = gcm::decrypt_password(encrypted_pw, APP_SECRET, &config.domain, srv_user);
     eprintln!("\n  Connecting to {name} ({host}:{port})...");
 
-    let ct = auth::get_ct(srv_user, &password, &None);
+    let ct = auth::get_ct(srv_user, &password, None)?;
     let nonce = auth::rand_u32()?;
     let open = auth::build_open(srv_user, &ct, 1400, cli.encrypt, nonce);
     let sock = auth::udp_connect(host, port, 3000)?;

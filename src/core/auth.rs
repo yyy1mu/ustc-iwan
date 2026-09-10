@@ -120,17 +120,20 @@ pub fn rand_u32() -> Result<u32> {
     Ok(rand::random())
 }
 
-pub fn get_ct(user: &str, pass: &str, ct_pass_hex: &Option<String>) -> [u8; 16] {
-    if let Some(ref h) = ct_pass_hex {
-        let h = h.trim_start_matches("0x");
-        let b: Vec<u8> = (0..h.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&h[i..i + 2], 16).unwrap())
-            .collect();
-        let mut o = [0u8; 16];
-        o.copy_from_slice(&b[..16]);
-        o
-    } else {
-        crypto::encrypt_password(pass, user)
+pub fn get_ct(user: &str, pass: &str, ct_pass_hex: Option<&str>) -> Result<[u8; 16]> {
+    let Some(hex) = ct_pass_hex else {
+        return Ok(crypto::encrypt_password(pass, user));
+    };
+    let hex = hex.trim().trim_start_matches("0x");
+    let bytes = (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(hex.get(i..i + 2).unwrap_or_default(), 16))
+        .collect::<std::result::Result<Vec<u8>, _>>()
+        .context("invalid --ct-pass hex")?;
+    if bytes.len() < 16 {
+        anyhow::bail!("--ct-pass must be at least 16 bytes");
     }
+    let mut ct = [0u8; 16];
+    ct.copy_from_slice(&bytes[..16]);
+    Ok(ct)
 }

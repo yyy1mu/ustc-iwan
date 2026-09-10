@@ -4,7 +4,7 @@ use iwan::core::auth;
 use std::time::Duration;
 
 pub fn run(args: &cli::AuthArgs) -> Result<()> {
-    let ct = auth::get_ct(&args.user, &args.pass, &args.ct_pass);
+    let ct = auth::get_ct(&args.user, &args.pass, args.ct_pass.as_deref())?;
     let nonce = auth::rand_u32()?;
     let open = auth::build_open(&args.user, &ct, args.mtu, args.encrypt, nonce);
     let sock = auth::udp_connect(&args.server, args.port, 3000)?;
