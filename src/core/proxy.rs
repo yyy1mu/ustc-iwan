@@ -126,12 +126,14 @@ pub fn run_pump(config: PumpConfig<'_>) -> Result<()> {
                 iov[cnt].iov_len = n + 8;
                 cnt += 1;
                 if cnt == BATCH {
-                    cnt = flush(&mut mmsg, cnt, sock_send.as_raw_fd());
+                    flush(&mut mmsg, cnt, sock_send.as_raw_fd());
+                    cnt = 0;
                 }
             } else if n == -1 {
                 match std::io::Error::last_os_error().kind() {
                     std::io::ErrorKind::WouldBlock => {
-                        cnt = flush(&mut mmsg, cnt, sock_send.as_raw_fd());
+                        flush(&mut mmsg, cnt, sock_send.as_raw_fd());
+                        cnt = 0;
                         unsafe { libc::poll(&mut pfd, 1, 200) };
                     }
                     std::io::ErrorKind::Interrupted => {}
@@ -238,7 +240,7 @@ pub fn run_pump(config: PumpConfig<'_>) -> Result<()> {
     Ok(())
 }
 
-fn flush(mmsg: &mut [libc::mmsghdr], cnt: usize, fd: std::os::fd::RawFd) -> usize {
+fn flush(mmsg: &mut [libc::mmsghdr], cnt: usize, fd: std::os::fd::RawFd) {
     let mut off = 0usize;
     while off < cnt {
         let sent = unsafe { libc::sendmmsg(fd, mmsg.as_mut_ptr().add(off), (cnt - off) as _, 0) };
@@ -252,9 +254,16 @@ fn flush(mmsg: &mut [libc::mmsghdr], cnt: usize, fd: std::os::fd::RawFd) -> usiz
             }
             break;
         }
+        if sent == 0 {
+            // A blocking UDP socket should always send at least one message;
+            // bail out instead of spinning if the kernel ever reports zero.
+            if super::util::debug_enabled() {
+                eprintln!("[TUN→UDP] sendmmsg sent 0, drop {} pkts", cnt - off);
+            }
+            break;
+        }
         off += sent as usize;
     }
-    0
 }
 
 fn expand_route_targets(targets: &[String]) -> Result<Vec<String>> {
