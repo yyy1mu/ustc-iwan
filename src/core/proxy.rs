@@ -13,6 +13,89 @@ const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
 /// protocol header, so the negotiated MTU must satisfy mtu + 8 <= SLOT.
 const BATCH: usize = 64;
 const SLOT: usize = 2048;
+const HEADER: usize = 8;
+
+/// A batch of TUN packets with protocol headers, flushed to the server
+/// with one `sendmmsg` call.
+struct UploadBatch {
+    slots: Vec<u8>,
+    iov: [libc::iovec; BATCH],
+    mmsg: [libc::mmsghdr; BATCH],
+    count: usize,
+    fd: RawFd,
+}
+
+impl UploadBatch {
+    fn new(fd: RawFd, header: &[u8; HEADER]) -> Self {
+        let mut slots = vec![0u8; BATCH * SLOT];
+        let mut iov: [libc::iovec; BATCH] = unsafe { std::mem::zeroed() };
+        let mut mmsg: [libc::mmsghdr; BATCH] = unsafe { std::mem::zeroed() };
+        for i in 0..BATCH {
+            slots[i * SLOT..i * SLOT + HEADER].copy_from_slice(header);
+            iov[i] = libc::iovec {
+                iov_base: slots[i * SLOT..].as_mut_ptr() as *mut _,
+                iov_len: 0,
+            };
+            mmsg[i].msg_hdr.msg_iov = &mut iov[i];
+            mmsg[i].msg_hdr.msg_iovlen = 1;
+        }
+        Self {
+            slots,
+            iov,
+            mmsg,
+            count: 0,
+            fd,
+        }
+    }
+
+    /// Writable payload area of the next slot, excluding the protocol header.
+    fn slot(&mut self) -> &mut [u8] {
+        &mut self.slots[self.count * SLOT + HEADER..(self.count + 1) * SLOT]
+    }
+
+    fn queue(&mut self, len: usize) {
+        self.iov[self.count].iov_len = len + HEADER;
+        self.count += 1;
+    }
+
+    fn is_full(&self) -> bool {
+        self.count == BATCH
+    }
+
+    fn flush(&mut self) {
+        let mut off = 0usize;
+        while off < self.count {
+            let sent = unsafe {
+                libc::sendmmsg(
+                    self.fd,
+                    self.mmsg.as_mut_ptr().add(off),
+                    (self.count - off) as _,
+                    0,
+                )
+            };
+            if sent < 0 {
+                if std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
+                    continue;
+                }
+                if super::util::debug_enabled() {
+                    let e = std::io::Error::last_os_error();
+                    eprintln!("[TUN→UDP] sendmmsg: {e}, drop {} pkts", self.count - off);
+                }
+                break;
+            }
+            if sent == 0 {
+                // A blocking UDP socket should always send at least one message;
+                // bail out instead of spinning if the kernel ever reports zero.
+                if super::util::debug_enabled() {
+                    eprintln!("[TUN→UDP] sendmmsg sent 0, drop {} pkts", self.count - off);
+                }
+                break;
+            }
+            off += sent as usize;
+        }
+        self.count = 0;
+    }
+}
 
 /// Options for the TUN↔UDP data-plane pump.
 pub struct PumpConfig<'a> {
@@ -45,10 +128,10 @@ pub fn run_pump(config: PumpConfig<'_>) -> Result<()> {
         mtu: auth_mtu,
     } = config;
     anyhow::ensure!(
-        usize::from(auth_mtu) + 8 <= SLOT,
+        usize::from(auth_mtu) + HEADER <= SLOT,
         "TUN MTU {} exceeds the {}-byte upload slot limit",
         auth_mtu,
-        SLOT - 8
+        SLOT - HEADER
     );
     let (ogw, odev) = route::capture_default().context("cannot detect default route")?;
     if super::util::debug_enabled() {
@@ -96,27 +179,15 @@ pub fn run_pump(config: PumpConfig<'_>) -> Result<()> {
 
     let r1 = running.clone();
     let t1 = std::thread::spawn(move || {
-        let mut buf_slots = vec![0u8; BATCH * SLOT];
-        let mut iov: [libc::iovec; BATCH] = unsafe { std::mem::zeroed() };
-        let mut mmsg: [libc::mmsghdr; BATCH] = unsafe { std::mem::zeroed() };
-        let hdr = protocol::pkhdr(protocol::PT_DATA_ENC, enc, sid, tok);
-
-        for i in 0..BATCH {
-            buf_slots[i * SLOT..i * SLOT + 8].copy_from_slice(&hdr);
-            iov[i] = libc::iovec {
-                iov_base: buf_slots[i * SLOT..].as_mut_ptr() as *mut _,
-                iov_len: 0,
-            };
-            mmsg[i].msg_hdr.msg_iov = &mut iov[i];
-            mmsg[i].msg_hdr.msg_iovlen = 1;
-        }
-
+        let mut batch = UploadBatch::new(
+            sock_send.as_raw_fd(),
+            &protocol::pkhdr(protocol::PT_DATA_ENC, enc, sid, tok),
+        );
         let mut pfd = libc::pollfd {
             fd: tun_fd,
             events: libc::POLLIN,
             revents: 0,
         };
-        let mut cnt = 0usize;
 
         if super::util::debug_enabled() {
             eprintln!("[TUN→UDP] started");
@@ -126,23 +197,18 @@ pub fn run_pump(config: PumpConfig<'_>) -> Result<()> {
                 break;
             }
 
-            let s = &mut buf_slots[cnt * SLOT + 8..(cnt + 1) * SLOT];
-            let n = tun::tun_read(tun_fd, s);
-
+            let n = tun::tun_read(tun_fd, batch.slot());
             if n > 0 {
                 let n = n as usize;
-                crypto::xor(&mut s[..n], &xk_send);
-                iov[cnt].iov_len = n + 8;
-                cnt += 1;
-                if cnt == BATCH {
-                    flush(&mut mmsg, cnt, sock_send.as_raw_fd());
-                    cnt = 0;
+                crypto::xor(&mut batch.slot()[..n], &xk_send);
+                batch.queue(n);
+                if batch.is_full() {
+                    batch.flush();
                 }
             } else if n == -1 {
                 match std::io::Error::last_os_error().kind() {
                     std::io::ErrorKind::WouldBlock => {
-                        flush(&mut mmsg, cnt, sock_send.as_raw_fd());
-                        cnt = 0;
+                        batch.flush();
                         unsafe { libc::poll(&mut pfd, 1, 200) };
                     }
                     std::io::ErrorKind::Interrupted => {}
@@ -156,6 +222,7 @@ pub fn run_pump(config: PumpConfig<'_>) -> Result<()> {
                 break;
             }
         }
+        batch.flush();
         if super::util::debug_enabled() {
             eprintln!("[TUN→UDP] stopped");
         }
@@ -247,32 +314,6 @@ pub fn run_pump(config: PumpConfig<'_>) -> Result<()> {
         eprintln!("CLOSE sent");
     }
     Ok(())
-}
-
-fn flush(mmsg: &mut [libc::mmsghdr], cnt: usize, fd: std::os::fd::RawFd) {
-    let mut off = 0usize;
-    while off < cnt {
-        let sent = unsafe { libc::sendmmsg(fd, mmsg.as_mut_ptr().add(off), (cnt - off) as _, 0) };
-        if sent < 0 {
-            if std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
-                continue;
-            }
-            if super::util::debug_enabled() {
-                let e = std::io::Error::last_os_error();
-                eprintln!("[TUN→UDP] sendmmsg: {e}, drop {} pkts", cnt - off);
-            }
-            break;
-        }
-        if sent == 0 {
-            // A blocking UDP socket should always send at least one message;
-            // bail out instead of spinning if the kernel ever reports zero.
-            if super::util::debug_enabled() {
-                eprintln!("[TUN→UDP] sendmmsg sent 0, drop {} pkts", cnt - off);
-            }
-            break;
-        }
-        off += sent as usize;
-    }
 }
 
 fn expand_route_targets(targets: &[String]) -> Result<Vec<String>> {
