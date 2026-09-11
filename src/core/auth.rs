@@ -94,27 +94,67 @@ fn enlarge_udp_buffers(sock: &std::net::UdpSocket) {
 
     const UDP_BUFFER_SIZE: libc::c_int = 16 * 1024 * 1024;
     let fd = sock.as_raw_fd();
-    let size = UDP_BUFFER_SIZE;
+    set_buffer(fd, libc::SO_RCVBUF, UDP_BUFFER_SIZE);
+    set_buffer(fd, libc::SO_SNDBUF, UDP_BUFFER_SIZE);
+
+    if crate::core::util::debug_enabled() {
+        let rcv = get_buffer(fd, libc::SO_RCVBUF);
+        let snd = get_buffer(fd, libc::SO_SNDBUF);
+        eprintln!("UDP buffers: rcvbuf={rcv} sndbuf={snd} (requested {UDP_BUFFER_SIZE})");
+        if rcv < UDP_BUFFER_SIZE || snd < UDP_BUFFER_SIZE {
+            eprintln!(
+                "  hint: raise net.core.rmem_max and net.core.wmem_max to allow {UDP_BUFFER_SIZE}"
+            );
+        }
+    }
+}
+
+#[cfg(unix)]
+fn set_buffer(fd: std::os::fd::RawFd, option: libc::c_int, size: libc::c_int) {
     unsafe {
         libc::setsockopt(
             fd,
             libc::SOL_SOCKET,
-            libc::SO_RCVBUF,
-            &size as *const _ as *const libc::c_void,
-            std::mem::size_of_val(&size) as libc::socklen_t,
-        );
-        libc::setsockopt(
-            fd,
-            libc::SOL_SOCKET,
-            libc::SO_SNDBUF,
+            option,
             &size as *const _ as *const libc::c_void,
             std::mem::size_of_val(&size) as libc::socklen_t,
         );
     }
 }
 
+#[cfg(unix)]
+fn get_buffer(fd: std::os::fd::RawFd, option: libc::c_int) -> libc::c_int {
+    let mut value: libc::c_int = 0;
+    let mut len = std::mem::size_of_val(&value) as libc::socklen_t;
+    unsafe {
+        libc::getsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            option,
+            &mut value as *mut _ as *mut libc::c_void,
+            &mut len,
+        );
+    }
+    value
+}
+
 #[cfg(not(unix))]
 fn enlarge_udp_buffers(_sock: &std::net::UdpSocket) {}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::fd::AsRawFd;
+
+    #[test]
+    fn udp_buffer_request_is_applied_or_clamped_upwards() {
+        let sock = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        enlarge_udp_buffers(&sock);
+        let fd = sock.as_raw_fd();
+        assert!(get_buffer(fd, libc::SO_RCVBUF) >= 64 * 1024);
+        assert!(get_buffer(fd, libc::SO_SNDBUF) >= 64 * 1024);
+    }
+}
 
 pub fn rand_u32() -> Result<u32> {
     Ok(rand::random())

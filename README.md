@@ -188,6 +188,18 @@ SOCKS5/HTTP 模式下，域名由客户端在本机解析为 IPv4 地址，默�
 
 TUN 默认 1400、用户态默认 1380：后者需为外层 IP+UDP 及协议头预留空间，取更保守的值。
 
+## 性能调优
+
+客户端会把连接服务器的 UDP 套接字收发缓冲区请求为 16 MB。Linux 默认的
+`net.core.rmem_max`/`wmem_max`（约 208 KB）会把它钳制到系统上限，高带宽场景可按需调大：
+
+```bash
+sudo sysctl -w net.core.rmem_max=16777216
+sudo sysctl -w net.core.wmem_max=16777216
+```
+
+用 `IWAN_DEBUG=1` 运行时会打印实际生效的 `rcvbuf`/`sndbuf`，便于确认是否被钳制。
+
 ## 命令行参数
 
 | 参数 | 行为 |
