@@ -29,7 +29,7 @@ src/core/                    客户端与服务端共享逻辑
 src/bin/client/              手动客户端（cli/auth/ping/proxy/socks/http）
 src/bin/oidc/                OIDC 客户端（cli/controller/oidc + main 流程）
 src/bin/server/              测试服务端（cli/handler/session，仅 Linux）
-doc/                         README 引用的截图、参考脚本 full_flow.py
+doc/                         README 引用的截图、使用技巧（usage-tips.md）、参考脚本 full_flow.py
 .github/workflows/release.yml  tag `v*` 触发的发布构建
 target/                      构建产物，已 gitignore，勿提交
 ```

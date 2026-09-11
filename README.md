@@ -29,6 +29,7 @@ SOCKS5/HTTP 模式由 smoltcp 在用户态生成完整的 TCP/IPv4 数据包，�
 - [命令行参数](#命令行参数)
 - [手动客户端](#手动客户端)
 - [服务端](#服务端)
+- [使用技巧](#使用技巧)
 - [参与贡献](#参与贡献)
 
 ## 快速开始
@@ -308,6 +309,13 @@ sudo ./iwan-server \
 echo 1 | sudo tee /proc/sys/net/ipv4/ip_forward
 sudo iptables -t nat -A POSTROUTING -s 198.18.0.0/16 -o eth0 -j MASQUERADE
 ```
+
+## 使用技巧
+
+与 Clash / Mihomo / Stash / Surge 等分流软件配合使用时，可在其配置中添加一个指向本程序
+本地端口的出站代理（SOCKS5 默认 `127.0.0.1:1080`，HTTP 默认 `127.0.0.1:8080`），再用规则
+把需要走 iWAN 的目标流量导过去。本程序默认绑定物理网卡，不会走进分流软件的虚拟网卡造成
+环路；完整配置示例、防环路与 fake-ip 处理见 [doc/usage-tips.md](doc/usage-tips.md)。
 
 ## 参与贡献
 
