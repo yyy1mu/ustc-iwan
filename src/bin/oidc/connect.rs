@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use iwan::core::{auth, crypto, gcm};
 #[cfg(target_os = "linux")]
-use iwan::core::{proxy, tun};
+use iwan::core::{tun, tun_proxy};
 use std::io::{self, Write};
 
 use crate::cli;
@@ -187,7 +187,7 @@ pub(crate) fn connect_server(cli: &cli::Cli, config: &LocalConfig) -> Result<()>
 
         let route_targets = route_targets(cli);
 
-        proxy::run_pump(proxy::PumpConfig {
+        tun_proxy::run_pump(tun_proxy::PumpConfig {
             tun_fd,
             tun_name: &cli.tun,
             sock: &sock,

@@ -6,9 +6,9 @@ pub mod local_proxy;
 pub(crate) mod netstack;
 pub mod protocol;
 #[cfg(target_os = "linux")]
-pub mod proxy;
-#[cfg(target_os = "linux")]
 pub mod route;
 #[cfg(target_os = "linux")]
 pub mod tun;
+#[cfg(target_os = "linux")]
+pub mod tun_proxy;
 pub mod util;

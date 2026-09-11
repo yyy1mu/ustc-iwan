@@ -1,6 +1,6 @@
 use crate::cli;
 use anyhow::{Context, Result};
-use iwan::core::{auth, crypto, proxy, tun};
+use iwan::core::{auth, crypto, tun, tun_proxy};
 use std::time::Duration;
 
 pub fn run(args: &cli::ProxyArgs, nonce: u32, open: Vec<u8>) -> Result<()> {
@@ -45,7 +45,7 @@ pub fn run(args: &cli::ProxyArgs, nonce: u32, open: Vec<u8>) -> Result<()> {
     tun::set_nonblock(tun_fd);
     println!("tun {} fd={}", args.tun, tun_fd);
 
-    proxy::run_pump(proxy::PumpConfig {
+    tun_proxy::run_pump(tun_proxy::PumpConfig {
         tun_fd,
         tun_name: &args.tun,
         sock: &sock,
