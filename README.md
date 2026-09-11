@@ -1,14 +1,14 @@
 # ustc-iwan
 
-USTC iWAN 命令行客户端，通过统一身份认证（OIDC）获取线路配置，并提供三种连接方式：
+USTC iWAN 命令行客户端：通过统一身份认证（OIDC）获取线路配置，并提供三种连接方式。
 
 | 连接方式 | 平台 | 需要 root | 说明 |
 |----------|------|-----------|------|
 | TUN 隧道 | 仅 Linux | 是（或 `CAP_NET_ADMIN`） | 创建虚拟网卡，按 IP/域名/CIDR 精确路由 |
-| SOCKS5 代理 | Linux / macOS / Windows | 否 | 用户态 TCP/IP 栈，本地监听 1080 |
-| HTTP 代理 | Linux / macOS / Windows | 否 | 同上，本地监听 8080 |
+| SOCKS5 代理 | Linux / macOS / Windows | 否 | 用户态 TCP/IP 栈，默认监听 1080 |
+| HTTP 代理 | Linux / macOS / Windows | 否 | 用户态 TCP/IP 栈，默认监听 8080 |
 
-后两种方式由 smoltcp 在用户态生成完整的 TCP/IPv4 数据包，不创建网卡、不修改系统路由。
+SOCKS5/HTTP 模式由 smoltcp 在用户态生成完整的 TCP/IPv4 数据包，不创建网卡、不修改系统路由。
 
 仓库包含三个二进制：
 
@@ -18,32 +18,40 @@ USTC iWAN 命令行客户端，通过统一身份认证（OIDC）获取线路配
 | `iwan-client` | 手动指定服务器、用户名和密码，适合调试或自定义接入。 |
 | `iwan-server` | 自建兼容测试服务端，普通用户通常不需要。 |
 
+## 目录
+
+- [快速开始](#快速开始)
+- [安装](#安装)
+- [获取线路配置](#获取线路配置)
+- [选择线路](#选择线路)
+- [连接方式](#连接方式)
+- [高级选项](#高级选项)
+- [命令行参数](#命令行参数)
+- [手动客户端](#手动客户端)
+- [服务端](#服务端)
+- [参与贡献](#参与贡献)
+
 ## 快速开始
 
 ```bash
-# 1. 从 Releases 下载对应平台二进制并加执行权限
+# 1. 下载对应平台二进制并加执行权限（见「安装」）
 chmod +x iwan-client-oidc-*
 
-# 2. 登录并获取线路配置
+# 2. 登录并保存线路配置
 ./iwan-client-oidc --fetch
 
 # 3. 查看本地线路
 ./iwan-client-oidc --list
 
-# 4. 选择一种方式连接（Linux 推荐 TUN，其他平台用 SOCKS5/HTTP）
+# 4. 连接（Linux 推荐 TUN，其他平台用 SOCKS5/HTTP）
 sudo ./iwan-client-oidc --connect            # TUN 隧道
 ./iwan-client-oidc --connect --socks         # SOCKS5 代理
 ./iwan-client-oidc --connect --http          # HTTP 代理
 ```
 
-## 系统要求
+## 安装
 
-- TUN 模式仅支持 Linux，需要 `/dev/net/tun`，连接时需要 root 或 `CAP_NET_ADMIN`。
-- SOCKS5/HTTP 模式支持 Linux、macOS 和 Windows，不需要上述权限。
-
-## 下载
-
-从 [GitHub Releases](https://github.com/yyy1mu/ustc-iwan/releases) 下载对应平台的二进制（压缩包内）：
+从 [GitHub Releases](https://github.com/yyy1mu/ustc-iwan/releases) 下载对应平台的压缩包：
 
 ```text
 iwan-client-oidc-linux-x86_64-musl      iwan-client-oidc-linux-aarch64-musl
@@ -51,10 +59,24 @@ iwan-client-oidc-macos-x86_64           iwan-client-oidc-macos-aarch64
 iwan-client-oidc-windows-x86_64.exe     iwan-client-oidc-windows-aarch64.exe
 ```
 
-Linux 上 musl 为静态链接，可直接运行；macOS 的 Intel 机器选 `x86_64`，Apple Silicon 选 `aarch64`。
-手动客户端 `iwan-client` 有对应平台的产物，测试服务端 `iwan-server` 仅提供 Linux 产物。
+- Linux 的 musl 产物为静态链接，可直接运行；另有 gnu/armv7/riscv64 等变体。
+- macOS 的 Intel 机器选 `x86_64`，Apple Silicon 选 `aarch64`。
+- 手动客户端 `iwan-client` 有对应平台的产物；测试服务端 `iwan-server` 仅提供 Linux 产物。
 
-源码构建产物位于 `target/<target>/release/`。
+从源码构建：
+
+```bash
+cargo build --release --bin iwan-client-oidc
+cargo build --release --bin iwan-client
+cargo build --release --bin iwan-server
+```
+
+交叉编译（需要 `cargo install cargo-zigbuild` 与对应 target）：
+
+```bash
+cargo zigbuild --bin iwan-client-oidc --target aarch64-unknown-linux-musl --release
+cargo zigbuild --bin iwan-client --target x86_64-unknown-linux-gnu.2.17 --release
+```
 
 ## 获取线路配置
 
@@ -99,9 +121,11 @@ Linux 上 musl 为静态链接，可直接运行；macOS 的 Intel 机器选 `x8
 
 配置用普通用户执行 `--fetch` 保存即可。连接时即使使用 `sudo`，也不需要把配置文件复制到 root 用户目录。
 
-## TUN 隧道
+## 连接方式
 
-Linux 下以 root 运行，创建 TUN 设备并建立隧道：
+### TUN 隧道
+
+Linux 下以 root 运行，创建 TUN 设备（需要 `/dev/net/tun`）并建立隧道：
 
 ```bash
 sudo ./iwan-client-oidc --connect
@@ -133,25 +157,21 @@ sudo ./iwan-client-oidc --connect --proxy-cidr 0.0.0.0/0
 
 注意：域名只在连接时解析一次，连接后解析变化不会自动同步到路由表。以上路由参数仅 TUN 模式可用。
 
-## SOCKS5 代理
+### SOCKS5 代理
 
 免 root，Linux / macOS / Windows 通用：
 
 ```bash
 ./iwan-client-oidc --connect --socks
-```
-
-默认监听 `127.0.0.1:1080`，可用 `--socks-listen` 修改。使用示例：
-
-```bash
 curl --socks5-hostname 127.0.0.1:1080 https://www.example.com/
 ```
 
-支持 `CONNECT`、IPv4 地址目标和域名目标。不支持 IPv6、SOCKS5 `BIND` 或 `UDP ASSOCIATE`（会收到对应的错误响应）。
+默认监听 `127.0.0.1:1080`，可用 `--socks-listen` 修改。支持 `CONNECT`、IPv4 地址目标和
+域名目标；不支持 IPv6、`BIND` 或 `UDP ASSOCIATE`（会收到对应的错误响应）。
 
-## HTTP 代理
+### HTTP 代理
 
-与 SOCKS5 类似，用 `--http` 启用，默认监听 `127.0.0.1:8080`：
+用 `--http` 启用，默认监听 `127.0.0.1:8080`：
 
 ```bash
 ./iwan-client-oidc --connect --http
@@ -159,52 +179,29 @@ curl -x http://127.0.0.1:8080 https://www.example.com/   # CONNECT（HTTPS）
 curl -x http://127.0.0.1:8080 http://www.example.com/    # 明文转发
 ```
 
-支持两种请求：`CONNECT host:port`（任意 TCP 隧道）和明文 HTTP 转发（`GET http://host/path`
-改写为 `GET /path` 后转发）。限制：仅 IPv4 目标；不支持代理认证；明文 HTTP 每个连接只处理
-一个请求（转发时强制 `Connection: close`）。
+支持 `CONNECT host:port`（任意 TCP 隧道）和明文 HTTP 转发（`GET http://host/path` 改写为
+`GET /path` 后转发）。限制：仅 IPv4 目标；不支持代理认证；明文 HTTP 每个连接只处理一个请求
+（转发时强制 `Connection: close`）。`--socks` 与 `--http` 互斥。
 
-`--socks` 与 `--http` 互斥。
+## 高级选项
 
-## 域名解析
+### 域名解析
 
 SOCKS5/HTTP 模式下，域名由客户端在本机解析为 IPv4 地址，默认使用 `114.114.114.114:53`，
 可用 `--dns` 指定其他解析器：
 
 ```text
---dns 223.5.5.5                      # 普通 UDP（可带端口：223.5.5.5:5353）
---dns tls://dns.alidns.com           # DNS over TLS（默认端口 853）
+--dns 223.5.5.5                         # 普通 UDP（可带端口：223.5.5.5:5353）
+--dns tls://dns.alidns.com              # DNS over TLS（默认端口 853）
 --dns https://dns.alidns.com/dns-query  # DNS over HTTPS
 ```
 
 当本机 DNS 被代理工具接管（如 TUN + fake-ip）时，建议改用 DoT 或 DoH，避免解析到假地址。
 
-## MTU
+### 网络接口绑定
 
-| 选项 | 适用模式 | 默认 | 作用 |
-|------|----------|------|------|
-| `--tun-mtu`（oidc）/ `--mtu`（`iwan-client proxy`） | TUN | 1400 | 握手上报的 MTU，服务器确认后设置到 TUN 设备，上限 2040。 |
-| `--proxy-mtu`（oidc，旧名 `--socks-mtu`）/ `--mtu`（`iwan-client socks/http`） | SOCKS5/HTTP | 1380 | 用户态内层 MTU，决定发出的包长；超长下行包会被丢弃，实际取与服务器确认值的较小者。 |
-| `--mtu`（`iwan-server`） | 服务端 | 1400 | 服务端 TUN 设备 MTU，应不小于客户端上报值。 |
-
-TUN 默认 1400、用户态默认 1380：后者需为外层 IP+UDP 及协议头预留空间，取更保守的值。
-
-## 性能调优
-
-客户端会把连接服务器的 UDP 套接字收发缓冲区请求为 16 MB。Linux 默认的
-`net.core.rmem_max`/`wmem_max`（约 208 KB）会把它钳制到系统上限，高带宽场景可按需调大：
-
-```bash
-sudo sysctl -w net.core.rmem_max=16777216
-sudo sysctl -w net.core.wmem_max=16777216
-```
-
-用 `IWAN_DEBUG=1` 运行时会打印实际生效的 `rcvbuf`/`sndbuf`，便于确认是否被钳制。
-
-## 网络接口绑定
-
-客户端默认把连接服务器的 UDP 套接字绑定到**当前活跃的物理网卡** IPv4 地址：
-优先有线网卡，其次无线网卡；虚拟网卡（VPN/TUN、docker、veth 等）会被排除。
-连接时会打印实际选择，例如：
+客户端默认把连接服务器的 UDP 套接字绑定到**当前活跃的物理网卡** IPv4 地址：优先有线网卡，
+其次无线网卡；虚拟网卡（VPN/TUN、docker、veth 等）会被排除。连接时会打印实际选择：
 
 ```text
   bind en0 (192.168.1.5)
@@ -219,10 +216,31 @@ sudo sysctl -w net.core.wmem_max=16777216
 ./iwan-client-oidc --connect --bind 0.0.0.0       # 交还内核按路由选择
 ```
 
-`iwan-client` 的 `ping`/`auth`/`proxy`/`socks`/`http` 子命令同样支持 `--bind`。
-按网卡名绑定时，Linux 会额外尝试 `SO_BINDTODEVICE` 锁定出口（需要
-`CAP_NET_ADMIN`，失败时仅保留源地址绑定并打印警告），macOS 使用
-`IP_BOUND_IF`，Windows 使用源地址绑定。
+`iwan-client` 的 `ping`/`auth`/`proxy`/`socks`/`http` 子命令同样支持 `--bind`。按网卡名绑定时，
+Linux 会额外尝试 `SO_BINDTODEVICE` 锁定出口（需要 `CAP_NET_ADMIN`，失败时仅保留源地址绑定并
+打印警告），macOS 使用 `IP_BOUND_IF`，Windows 使用源地址绑定。
+
+### MTU
+
+| 选项 | 适用模式 | 默认 | 作用 |
+|------|----------|------|------|
+| `--tun-mtu`（oidc）/ `--mtu`（`iwan-client proxy`） | TUN | 1400 | 握手上报的 MTU，服务器确认后设置到 TUN 设备，上限 2040。 |
+| `--proxy-mtu`（oidc，旧名 `--socks-mtu`）/ `--mtu`（`iwan-client socks/http`） | SOCKS5/HTTP | 1380 | 用户态内层 MTU，决定发出的包长；超长下行包会被丢弃，实际取与服务器确认值的较小者。 |
+| `--mtu`（`iwan-server`） | 服务端 | 1400 | 服务端 TUN 设备 MTU，应不小于客户端上报值。 |
+
+TUN 默认 1400、用户态默认 1380：后者需为外层 IP+UDP 及协议头预留空间，取更保守的值。
+
+### 性能调优
+
+客户端会把连接服务器的 UDP 套接字收发缓冲区请求为 16 MB。Linux 默认的
+`net.core.rmem_max`/`wmem_max`（约 208 KB）会把它钳制到系统上限，高带宽场景可按需调大：
+
+```bash
+sudo sysctl -w net.core.rmem_max=16777216
+sudo sysctl -w net.core.wmem_max=16777216
+```
+
+用 `IWAN_DEBUG=1` 运行时会打印实际生效的 `rcvbuf`/`sndbuf`，便于确认是否被钳制。
 
 ## 命令行参数
 
@@ -241,7 +259,7 @@ sudo sysctl -w net.core.wmem_max=16777216
 | `--config-dir <dir>` | 配置目录，默认 `~/.config/iwan`。 |
 | `--tun <name>` | TUN 设备名（Linux），默认 `iwan0`。 |
 | `--tun-mtu <mtu>` | TUN 协商 MTU（Linux），默认 `1400`。 |
-| `--proxy-ip/--proxy-domain/--proxy-cidr` | TUN 路由规则（Linux）。 |
+| `--proxy-ip` / `--proxy-domain` / `--proxy-cidr` | TUN 路由规则（Linux）。 |
 | `--encrypt <0\|1\|2>` | 加密模式：0=None，1=XOR，2=AES，默认 `1`。 |
 
 必须指定 `--fetch`、`--list`、`--connect`、`--all` 中的至少一个动作。
@@ -266,21 +284,6 @@ sudo ./iwan-client proxy --server <SERVER_IP> --port 6001 \
   --user <USER> --pass '<PASSWORD>' --listen 127.0.0.1:1080
 ./iwan-client http  --server <SERVER_IP> --port 6001 \
   --user <USER> --pass '<PASSWORD>' --listen 127.0.0.1:8080
-```
-
-## 从源码构建
-
-```bash
-cargo build --release --bin iwan-client-oidc
-cargo build --release --bin iwan-client
-cargo build --release --bin iwan-server
-```
-
-交叉编译（需要 `cargo install cargo-zigbuild` 与对应 target）：
-
-```bash
-cargo zigbuild --bin iwan-client-oidc --target aarch64-unknown-linux-musl --release
-cargo zigbuild --bin iwan-client --target x86_64-unknown-linux-gnu.2.17 --release
 ```
 
 ## 服务端
