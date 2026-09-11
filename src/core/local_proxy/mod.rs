@@ -49,7 +49,7 @@ pub fn run(sock: &UdpSocket, config: ProxyConfig<'_>) -> Result<()> {
     listener.set_nonblocking(true)?;
     sock.set_nonblocking(true)?;
 
-    let mut engine = Engine::new(listener, &config)?;
+    let mut engine = Engine::new(listener, sock, &config)?;
 
     println!("{} listening on {}", config.protocol, config.listen);
     if crate::core::util::debug_enabled() {
@@ -59,7 +59,7 @@ pub fn run(sock: &UdpSocket, config: ProxyConfig<'_>) -> Result<()> {
         );
     }
 
-    engine.run(sock)?;
+    engine.run()?;
     println!("{} stopped", config.protocol);
     Ok(())
 }

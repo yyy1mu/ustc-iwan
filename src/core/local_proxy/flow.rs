@@ -45,6 +45,29 @@ pub(super) enum HttpMode {
     Forward,
 }
 
+/// Outcome of parsing one handshake step. The engine applies it to the flow,
+/// keeping all state mutation in one place.
+pub(super) enum Step {
+    /// Not enough bytes yet.
+    Wait,
+    /// Reply to the client and continue in the given state.
+    Reply {
+        bytes: Vec<u8>,
+        consumed: usize,
+        next: LocalState,
+    },
+    /// Connect to the requested target.
+    Open {
+        host: String,
+        port: u16,
+        consumed: usize,
+        mode: Option<HttpMode>,
+        rewritten: Option<Vec<u8>>,
+    },
+    /// Reject the request.
+    Fail(ProxyError),
+}
+
 pub(super) enum LocalState {
     SocksGreeting,
     SocksRequest,

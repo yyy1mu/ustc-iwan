@@ -11,9 +11,9 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::time::{Duration, Instant as StdInstant, SystemTime, UNIX_EPOCH};
 
-use super::flow::{queue_proxy_error, HttpMode, LocalFlow, LocalState, ProxyError};
-use super::{ProxyConfig, ProxyProtocol};
-use crate::core::dns::{spawn_ipv4_query, DnsResolver, DnsResult};
+use super::flow::{queue_proxy_error, HttpMode, LocalFlow, LocalState, ProxyError, Step};
+use super::{http, socks, DnsResolver, ProxyConfig, ProxyProtocol};
+use crate::core::dns::{spawn_ipv4_query, DnsResult};
 use crate::core::netstack::{
     receive_vpn, send_vpn, send_vpn_keepalive, IpTunnelDevice, VPN_KEEPALIVE_INTERVAL,
 };
@@ -26,30 +26,35 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const READ_BUFFER: usize = 16 * 1024;
 
 pub(super) struct Engine<'a> {
-    pub(super) listener: TcpListener,
-    pub(super) device: IpTunnelDevice,
-    pub(super) iface: Interface,
-    pub(super) sockets: SocketSet<'a>,
-    pub(super) flows: HashMap<u64, LocalFlow>,
-    pub(super) allocated_ports: HashSet<u16>,
-    pub(super) next_flow: u64,
-    pub(super) next_port: u16,
-    pub(super) dns: DnsResolver,
-    pub(super) dns_tx: Sender<DnsResult>,
-    pub(super) dns_rx: Receiver<DnsResult>,
-    pub(super) inner_ip: Ipv4Addr,
-    pub(super) protocol: ProxyProtocol,
-    pub(super) xor_key: &'a [u8],
-    pub(super) sid: u16,
-    pub(super) token: u32,
-    pub(super) encryption: u8,
-    pub(super) mtu: usize,
-    pub(super) session_started: StdInstant,
-    pub(super) last_keepalive: StdInstant,
+    sock: &'a UdpSocket,
+    listener: TcpListener,
+    device: IpTunnelDevice,
+    iface: Interface,
+    sockets: SocketSet<'a>,
+    flows: HashMap<u64, LocalFlow>,
+    allocated_ports: HashSet<u16>,
+    next_flow: u64,
+    next_port: u16,
+    dns: DnsResolver,
+    dns_tx: Sender<DnsResult>,
+    dns_rx: Receiver<DnsResult>,
+    inner_ip: Ipv4Addr,
+    protocol: ProxyProtocol,
+    xor_key: &'a [u8],
+    sid: u16,
+    token: u32,
+    encryption: u8,
+    mtu: usize,
+    session_started: StdInstant,
+    last_keepalive: StdInstant,
 }
 
 impl<'a> Engine<'a> {
-    pub(super) fn new(listener: TcpListener, config: &ProxyConfig<'a>) -> Result<Self> {
+    pub(super) fn new(
+        listener: TcpListener,
+        sock: &'a UdpSocket,
+        config: &ProxyConfig<'a>,
+    ) -> Result<Self> {
         let mut device = IpTunnelDevice::new(config.mtu);
         let mut iface_config = Config::new(HardwareAddress::Ip);
         iface_config.random_seed = random_seed();
@@ -71,6 +76,7 @@ impl<'a> Engine<'a> {
             .unwrap_or(session_started);
 
         Ok(Self {
+            sock,
             listener,
             device,
             iface,
@@ -94,14 +100,14 @@ impl<'a> Engine<'a> {
         })
     }
 
-    pub(super) fn run(&mut self, sock: &UdpSocket) -> Result<()> {
+    pub(super) fn run(&mut self) -> Result<()> {
         let running = Arc::new(AtomicBool::new(true));
         let stop = running.clone();
         ctrlc::set_handler(move || stop.store(false, Ordering::Relaxed))
             .context("set SIGINT handler")?;
 
         while running.load(Ordering::Relaxed) {
-            self.tick(sock)?;
+            self.tick()?;
 
             let delay = self
                 .iface
@@ -119,7 +125,7 @@ impl<'a> Engine<'a> {
         }
         self.iface.poll(now(), &mut self.device, &mut self.sockets);
         send_vpn(
-            sock,
+            self.sock,
             &mut self.device,
             self.xor_key,
             self.sid,
@@ -127,13 +133,13 @@ impl<'a> Engine<'a> {
             self.encryption,
         )?;
         let close = protocol::pkhdr(protocol::PT_CLOSE, self.encryption, self.sid, self.token);
-        let _ = sock.send(&protocol::ctrl_pkt(&close, &[]));
+        let _ = self.sock.send(&protocol::ctrl_pkt(&close, &[]));
         Ok(())
     }
 
-    fn tick(&mut self, sock: &UdpSocket) -> Result<()> {
+    fn tick(&mut self) -> Result<()> {
         send_vpn_keepalive(
-            sock,
+            self.sock,
             self.sid,
             self.token,
             self.encryption,
@@ -141,7 +147,7 @@ impl<'a> Engine<'a> {
         )?;
         self.accept_clients()?;
         receive_vpn(
-            sock,
+            self.sock,
             &mut self.device,
             self.xor_key,
             self.sid,
@@ -157,7 +163,7 @@ impl<'a> Engine<'a> {
         self.update_tcp_states();
         self.service_outputs();
         send_vpn(
-            sock,
+            self.sock,
             &mut self.device,
             self.xor_key,
             self.sid,
@@ -269,9 +275,52 @@ impl<'a> Engine<'a> {
     }
 
     fn process_request(&mut self, id: u64) {
-        match self.protocol {
-            ProxyProtocol::Socks5 => self.process_socks5(id),
-            ProxyProtocol::Http => self.process_http(id),
+        let step = {
+            let Some(flow) = self.flows.get(&id) else {
+                return;
+            };
+            match flow.state {
+                LocalState::SocksGreeting => socks::greeting(&flow.input),
+                LocalState::SocksRequest => socks::request(&flow.input),
+                LocalState::HttpHead => http::request(&flow.input),
+                _ => return,
+            }
+        };
+
+        match step {
+            Step::Wait => {}
+            Step::Fail(error) => self.queue_error(id, error),
+            Step::Reply {
+                bytes,
+                consumed,
+                next,
+            } => {
+                if let Some(flow) = self.flows.get_mut(&id) {
+                    flow.input.drain(..consumed);
+                    flow.queue(&bytes);
+                    flow.set_state(next);
+                }
+            }
+            Step::Open {
+                host,
+                port,
+                consumed,
+                mode,
+                rewritten,
+            } => {
+                if let Some(flow) = self.flows.get_mut(&id) {
+                    flow.input.drain(..consumed);
+                    if let Some(rewritten) = rewritten {
+                        let mut input = rewritten;
+                        input.extend_from_slice(&flow.input);
+                        flow.input = input;
+                    }
+                    if let Some(mode) = mode {
+                        flow.http_mode = Some(mode);
+                    }
+                }
+                self.open_remote(id, &host, port);
+            }
         }
     }
 
@@ -413,7 +462,7 @@ impl<'a> Engine<'a> {
         );
     }
 
-    pub(super) fn open_remote(&mut self, id: u64, host: &str, port: u16) {
+    fn open_remote(&mut self, id: u64, host: &str, port: u16) {
         match classify_host(host) {
             HostTarget::Ipv4(ip) => self.open_tcp_connection(id, ip, port),
             HostTarget::Ipv6 => self.queue_error(id, ProxyError::AddressNotSupported),

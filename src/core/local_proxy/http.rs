@@ -1,5 +1,4 @@
-use super::engine::Engine;
-use super::flow::{queue_proxy_error, HttpMode, LocalState, ProxyError};
+use super::flow::{HttpMode, ProxyError, Step};
 
 const MAX_HTTP_HEAD: usize = 64 * 1024;
 
@@ -107,46 +106,31 @@ fn split_host_port(target: &str) -> Option<(String, u16)> {
     }
 }
 
-impl Engine<'_> {
-    pub(super) fn process_http(&mut self, id: u64) {
-        let open = {
-            let Some(flow) = self.flows.get_mut(&id) else {
-                return;
-            };
-            if !matches!(flow.state, LocalState::HttpHead) {
-                return;
-            }
-            match parse_http_request(&flow.input) {
-                Err(error) => {
-                    queue_proxy_error(flow, self.protocol, error);
-                    return;
-                }
-                Ok(None) => return,
-                Ok(Some((request, consumed))) => {
-                    flow.input.drain(..consumed);
-                    match request {
-                        HttpRequest::Connect { host, port } => {
-                            flow.http_mode = Some(HttpMode::Connect);
-                            Some((host, port))
-                        }
-                        HttpRequest::Forward {
-                            host,
-                            port,
-                            rewritten,
-                        } => {
-                            flow.http_mode = Some(HttpMode::Forward);
-                            let mut input = rewritten;
-                            input.extend_from_slice(&flow.input);
-                            flow.input = input;
-                            Some((host, port))
-                        }
-                    }
-                }
-            }
-        };
-        if let Some((host, port)) = open {
-            self.open_remote(id, &host, port);
-        }
+pub(super) fn request(input: &[u8]) -> Step {
+    match parse_http_request(input) {
+        Err(error) => Step::Fail(error),
+        Ok(None) => Step::Wait,
+        Ok(Some((HttpRequest::Connect { host, port }, consumed))) => Step::Open {
+            host,
+            port,
+            consumed,
+            mode: Some(HttpMode::Connect),
+            rewritten: None,
+        },
+        Ok(Some((
+            HttpRequest::Forward {
+                host,
+                port,
+                rewritten,
+            },
+            consumed,
+        ))) => Step::Open {
+            host,
+            port,
+            consumed,
+            mode: Some(HttpMode::Forward),
+            rewritten: Some(rewritten),
+        },
     }
 }
 

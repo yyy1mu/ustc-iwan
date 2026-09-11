@@ -55,7 +55,7 @@ cargo zigbuild --bin iwan-client --target x86_64-unknown-linux-gnu.2.17 --releas
 ```bash
 cargo fmt --check                    # 当前通过，使用默认 rustfmt 配置（无 rustfmt.toml）
 cargo clippy --all-targets           # 当前无警告（无 clippy.toml，CI 不跑 lint）
-cargo test                           # 单元测试，当前 17 个全过
+cargo test                           # 单元测试，当前 18 个全过
 cargo check                          # Rust 无独立 typecheck，用 check/clippy 代替
 ```
 
