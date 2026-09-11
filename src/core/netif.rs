@@ -244,11 +244,14 @@ fn default_route_device() -> Option<String> {
 
 #[cfg(target_os = "windows")]
 fn interfaces() -> Vec<Interface> {
-    let script = "$def=(Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Sort-Object RouteMetric | \
-                  Select-Object -First 1).InterfaceAlias; \
-                  Get-NetIPConfiguration | Where-Object { $_.NetAdapter.Status -eq 'Up' -and $_.IPv4Address } | \
-                  ForEach-Object { \"$($_.InterfaceAlias)|$($_.IPv4Address.IPAddress)|\
-                  $($_.NetAdapter.MediaType -eq '802.11')|$($_.InterfaceAlias -eq $def)\" }";
+    // `Get-NetAdapter -Physical` excludes Wintun/TAP/Hyper-V and other virtual
+    // adapters; Get-NetIPConfiguration alone would list them as candidates.
+    let script = "$def=(Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | \
+                  Sort-Object RouteMetric | Select-Object -First 1).InterfaceIndex; \
+                  Get-NetAdapter -Physical | Where-Object { $_.Status -eq 'Up' } | ForEach-Object { \
+                  $ip=(Get-NetIPAddress -InterfaceIndex $_.ifIndex -AddressFamily IPv4 \
+                  -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty IPAddress); \
+                  if ($ip) { \"$($_.Name)|$ip|$($_.MediaType -eq '802.11')|$($_.ifIndex -eq $def)\" } }";
     let Ok(output) = std::process::Command::new("powershell")
         .args(["-NoProfile", "-Command", script])
         .output()
