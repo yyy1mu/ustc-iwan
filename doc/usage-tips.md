@@ -42,20 +42,31 @@ HTTP 端口则用 `type: http`、`port: 8080`。
 
 ## 3. 添加分流规则
 
+仓库提供了现成的规则文件 [`doc/iwan-rules.yaml`](iwan-rules.yaml)，包含 USTC 的 11 个网段
+和 `ustc.edu.cn` / `ustc.edu` 域名。以 Mihomo / Clash Meta 的 rule-provider 为例：
+
 ```yaml
+rule-providers:
+  iwan:
+    type: file
+    behavior: classical
+    path: ./rules/iwan.yaml        # 把规则文件复制到配置目录下
+
 rules:
-  # 需要走 iWAN 的目标（示例）
-  - DOMAIN-SUFFIX,ustc.edu.cn,iwan
-  - DOMAIN-SUFFIX,example.com,iwan
-  - IP-CIDR,202.38.0.0/16,iwan,no-resolve
-
-  # 防止 iWAN 服务器本身的流量被再次代理（见第 4 节）
-  - IP-CIDR,<iWAN服务器IP>/32,DIRECT,no-resolve
-
+  - RULE-SET,iwan,iwan
+  - IP-CIDR,<iWAN服务器IP>/32,DIRECT,no-resolve   # 防止环路（见第 4 节）
   - MATCH,DIRECT
 ```
 
-规则从上到下匹配，把 iWAN 规则放在 `MATCH` 之前。
+经典 Clash 不支持 rule-provider 时，可把规则文件 `payload:` 下的条目逐条复制进 `rules:`，
+并在每条末尾追加 `,iwan`，例如：
+
+```yaml
+  - IP-CIDR,202.38.64.0/19,iwan,no-resolve
+  - DOMAIN-SUFFIX,ustc.edu.cn,iwan
+```
+
+规则从上到下匹配，把 iWAN 规则放在 `MATCH` 之前；需要其他目标时按同样格式追加。
 
 ## 4. 避免流量环路
 

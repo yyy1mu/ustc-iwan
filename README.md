@@ -315,7 +315,8 @@ sudo iptables -t nat -A POSTROUTING -s 198.18.0.0/16 -o eth0 -j MASQUERADE
 与 Clash / Mihomo / Stash / Surge 等分流软件配合使用时，可在其配置中添加一个指向本程序
 本地端口的出站代理（SOCKS5 默认 `127.0.0.1:1080`，HTTP 默认 `127.0.0.1:8080`），再用规则
 把需要走 iWAN 的目标流量导过去。本程序默认绑定物理网卡，不会走进分流软件的虚拟网卡造成
-环路；完整配置示例、防环路与 fake-ip 处理见 [doc/usage-tips.md](doc/usage-tips.md)。
+环路；完整配置示例、防环路与 fake-ip 处理见 [doc/usage-tips.md](doc/usage-tips.md)，
+现成的 USTC 网段与域名规则见 [doc/iwan-rules.yaml](doc/iwan-rules.yaml)。
 
 ## 参与贡献
 

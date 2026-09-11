@@ -1,0 +1,31 @@
+# iWAN 分流规则：USTC 网段 + 域名
+#
+# 用法一（推荐，Mihomo / Clash Meta rule-provider）：
+#   rule-providers:
+#     iwan:
+#       type: file
+#       behavior: classical
+#       path: ./rules/iwan.yaml      # 把本文件复制到 Clash 配置目录下
+#   rules:
+#     - RULE-SET,iwan,iwan
+#
+# 用法二（经典 Clash）：把 payload 下的条目逐条复制进 rules，并在末尾追加 `,iwan`，
+# 例如 `IP-CIDR,202.38.64.0/19,iwan,no-resolve`、`DOMAIN-SUFFIX,ustc.edu.cn,iwan`。
+
+payload:
+  # ── USTC 网段 ──
+  - IP-CIDR,114.214.160.0/19,no-resolve
+  - IP-CIDR,114.214.192.0/18,no-resolve
+  - IP-CIDR,202.38.64.0/19,no-resolve
+  - IP-CIDR,210.45.64.0/20,no-resolve
+  - IP-CIDR,210.45.112.0/20,no-resolve
+  - IP-CIDR,211.86.144.0/20,no-resolve
+  - IP-CIDR,222.195.64.0/19,no-resolve
+  - IP-CIDR,210.72.22.0/24,no-resolve
+  - IP-CIDR,202.141.160.0/19,no-resolve
+  - IP-CIDR,218.22.21.0/27,no-resolve
+  - IP-CIDR,218.104.71.160/28,no-resolve
+
+  # ── USTC 域名 ──
+  - DOMAIN-SUFFIX,ustc.edu.cn
+  - DOMAIN-SUFFIX,ustc.edu
