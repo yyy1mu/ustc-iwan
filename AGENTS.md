@@ -22,7 +22,7 @@ src/core/                    客户端与服务端共享逻辑
   protocol.rs                数据包类型、TLV 常量与编解码
   local_proxy/               用户态 SOCKS5/HTTP 数据面（Engine + socks/http 前端，跨平台）
   util.rs                    IWAN_DEBUG、ip 命令封装
-  proxy.rs / route.rs / tun.rs   TUN 数据面与路由（仅 Linux，cfg 门控）
+  tun_proxy.rs / route.rs / tun.rs   TUN 数据面与路由（仅 Linux，cfg 门控）
   dns.rs                     域名解析（UDP/DoT/DoH，公共 API）
   netstack/                  smoltcp 胶水层（device/tunnel，crate 内部）
 src/bin/client/              手动客户端（cli/auth/ping/proxy/socks/http）
@@ -55,7 +55,7 @@ cargo zigbuild --bin iwan-client --target x86_64-unknown-linux-gnu.2.17 --releas
 ```bash
 cargo fmt --check                    # 当前通过，使用默认 rustfmt 配置（无 rustfmt.toml）
 cargo clippy --all-targets           # 当前无警告（无 clippy.toml，CI 不跑 lint）
-cargo test                           # 单元测试，当前 16 个全过
+cargo test                           # 单元测试，当前 17 个全过
 cargo check                          # Rust 无独立 typecheck，用 check/clippy 代替
 ```
 
@@ -77,7 +77,7 @@ cargo check                          # Rust 无独立 typecheck，用 check/clip
 - 共享逻辑放 `src/core`（库），`src/bin/*` 只做 CLI 参数解析与流程编排，保持薄封装。
 - 平台差异用 `#[cfg(target_os = "linux")]` 门控，非 Linux 目标必须能编译：Linux 专属功能在非 Linux 上要么整体 `cfg` 掉，要么给出明确报错（参考 `src/bin/server/main.rs`）。
 - 协议/加密是 wire-level 兼容层：`protocol.rs`、`crypto.rs`、`gcm.rs` 的常量与算法必须与 iWAN 服务端一致，改动前先确认兼容性。
-- SOCKS5/HTTP 走 `core/local_proxy/` + `core/dns.rs` + `core/netstack/`（smoltcp，用户态组包）；TUN 走 `core/proxy.rs` + `route.rs` + `tun.rs`。两条路径共享 `auth`/`protocol`/`crypto`。
+- SOCKS5/HTTP 走 `core/local_proxy/` + `core/dns.rs` + `core/netstack/`（smoltcp，用户态组包）；TUN 走 `core/tun_proxy.rs` + `route.rs` + `tun.rs`。两条路径共享 `auth`/`protocol`/`crypto`。
 - OIDC 流程的 HTTP 签名、时间戳、nonce 逻辑在 `src/bin/oidc/controller.rs`；`APP_ID`/`APP_SECRET`/`CONTROLLER`/`DOMAIN` 是服务端约定常量，不要改动。
 - 新增依赖前先确认必要性；当前依赖刻意精简（见 `Cargo.toml`），不要随意引入大型框架。
 
