@@ -125,7 +125,8 @@ pub(crate) fn connect_server(cli: &cli::Cli, config: &LocalConfig) -> Result<()>
     let srv = select_server(&config.servers, cli.server.as_deref())?;
     anyhow::ensure!(!srv.host.is_empty(), "selected server has no host");
 
-    let password = gcm::decrypt_password(&srv.password, APP_SECRET, &config.domain, &srv.username);
+    let password = gcm::decrypt_password(&srv.password, APP_SECRET, &config.domain, &srv.username)
+        .context("decrypt server password")?;
     eprintln!(
         "\n  Connecting to {} ({}:{})...",
         srv.name, srv.host, srv.port

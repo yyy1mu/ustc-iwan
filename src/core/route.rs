@@ -1,4 +1,4 @@
-use super::{protocol, util};
+use super::util;
 
 pub fn capture_default() -> Option<(String, String)> {
     let o = std::process::Command::new("ip")
@@ -42,7 +42,8 @@ pub fn local_subnet(dev: &str) -> Option<String> {
                     } else {
                         !((1u32 << (32 - plen)) - 1)
                     };
-                    let net = u32::from_be_bytes(protocol::s2ip4(ip)) & mask;
+                    let ip: std::net::Ipv4Addr = ip.parse().ok()?;
+                    let net = u32::from(ip) & mask;
                     let b = net.to_be_bytes();
                     return Some(format!("{}.{}.{}.{}/{}", b[0], b[1], b[2], b[3], plen));
                 }

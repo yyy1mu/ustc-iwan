@@ -1,4 +1,5 @@
 use super::crypto;
+use anyhow::{Context, Result};
 use base64::Engine;
 
 fn gf128_mul(x: u128, y: u128) -> u128 {
@@ -47,8 +48,10 @@ fn ghash(h: u128, aad: &[u8], ct: &[u8]) -> u128 {
     y
 }
 
-pub fn gcm_decrypt(key: &[u8; 32], nonce: &[u8; 12], ct_tag: &[u8], aad: &[u8]) -> Vec<u8> {
-    assert!(ct_tag.len() >= 16, "ciphertext too short for tag");
+pub fn gcm_decrypt(key: &[u8; 32], nonce: &[u8; 12], ct_tag: &[u8], aad: &[u8]) -> Result<Vec<u8>> {
+    if ct_tag.len() < 16 {
+        anyhow::bail!("ciphertext too short for tag");
+    }
     let (ct, tag) = ct_tag.split_at(ct_tag.len() - 16);
 
     let h_block = crypto::aes_block_256(key, &[0u8; 16]);
@@ -72,17 +75,17 @@ pub fn gcm_decrypt(key: &[u8; 32], nonce: &[u8; 12], ct_tag: &[u8], aad: &[u8]) 
     let s = ghash(h, aad, ct).to_be_bytes();
     let computed: Vec<u8> = s.iter().zip(sv.iter()).map(|(a, b)| a ^ b).collect();
     if computed.as_slice() != tag {
-        panic!("GCM InvalidTag");
+        anyhow::bail!("GCM tag mismatch");
     }
-    plain
+    Ok(plain)
 }
 
-pub fn b64url_decode(s: &str) -> Vec<u8> {
+pub fn b64url_decode(s: &str) -> Result<Vec<u8>> {
     base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(s)
         .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(s))
         .or_else(|_| base64::engine::general_purpose::STANDARD.decode(s))
-        .unwrap_or_else(|_| panic!("base64 decode failed: {s}"))
+        .with_context(|| format!("base64 decode failed: {s}"))
 }
 
 pub fn b64url_no_pad(data: &[u8]) -> String {
@@ -94,16 +97,18 @@ pub fn decrypt_password(
     app_secret: &str,
     domain: &str,
     username: &str,
-) -> String {
+) -> Result<String> {
     let label = format!("{app_secret}|{domain}|{username}");
     let key = crypto::sha256(label.as_bytes());
-    let data = b64url_decode(encrypted_b64);
-    assert!(data.len() >= 28, "encrypted password too short");
+    let data = b64url_decode(encrypted_b64)?;
+    if data.len() < 28 {
+        anyhow::bail!("encrypted password too short");
+    }
     let (nonce, ct_tag) = data.split_at(12);
-    let nonce: [u8; 12] = nonce.try_into().unwrap();
+    let nonce: [u8; 12] = nonce.try_into().expect("nonce length checked");
     let aad = format!("{domain}|{username}");
-    let plain = gcm_decrypt(&key, &nonce, ct_tag, aad.as_bytes());
-    String::from_utf8(plain).unwrap_or_else(|e| format!("<utf8 error: {e}>"))
+    let plain = gcm_decrypt(&key, &nonce, ct_tag, aad.as_bytes())?;
+    String::from_utf8(plain).context("decrypted password is not UTF-8")
 }
 
 #[cfg(test)]
@@ -113,13 +118,16 @@ mod tests {
     #[test]
     fn decodes_padded_and_unpadded_base64url() {
         assert_eq!(
-            b64url_decode("eyJzdWIiOiJTQTIzMjIxMTE0In0"),
+            b64url_decode("eyJzdWIiOiJTQTIzMjIxMTE0In0").unwrap(),
             br#"{"sub":"SA23221114"}"#
         );
-        assert_eq!(b64url_decode("aGk="), b"hi");
+        assert_eq!(b64url_decode("aGk=").unwrap(), b"hi");
         assert_eq!(
-            b64url_decode("SewlHBmRrTfRW2ngUX7K/7wspO/ey409480QfXmduEJ7n1rSlo4JRECcsQ==").len(),
+            b64url_decode("SewlHBmRrTfRW2ngUX7K/7wspO/ey409480QfXmduEJ7n1rSlo4JRECcsQ==")
+                .unwrap()
+                .len(),
             43
         );
+        assert!(b64url_decode("not base64!").is_err());
     }
 }

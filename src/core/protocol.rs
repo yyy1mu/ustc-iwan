@@ -79,8 +79,3 @@ pub fn ip_to_string(b: &[u8]) -> String {
         format!("{}.{}.{}.{}", b[0], b[1], b[2], b[3])
     }
 }
-
-pub fn s2ip4(s: &str) -> [u8; 4] {
-    let p: Vec<u8> = s.split('.').map(|x| x.parse().unwrap()).collect();
-    [p[0], p[1], p[2], p[3]]
-}

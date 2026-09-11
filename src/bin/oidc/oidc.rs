@@ -51,8 +51,8 @@ pub fn run(agent: &ureq::Agent) -> Result<(String, String)> {
         .as_str()
         .and_then(|jwt| jwt.split('.').nth(1))
         .and_then(|payload| {
-            let claims: serde_json::Value =
-                serde_json::from_slice(&gcm::b64url_decode(payload)).ok()?;
+            let decoded = gcm::b64url_decode(payload).ok()?;
+            let claims: serde_json::Value = serde_json::from_slice(&decoded).ok()?;
             claims["name"]
                 .as_str()
                 .or_else(|| claims["preferred_username"].as_str())
