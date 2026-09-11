@@ -243,6 +243,30 @@ sudo sysctl -w net.core.wmem_max=16777216
 
 用 `IWAN_DEBUG=1` 运行时会打印实际生效的 `rcvbuf`/`sndbuf`，便于确认是否被钳制。
 
+### 调试输出
+
+设置 `IWAN_DEBUG=1` 可输出 DNS 解析、VPN 收发包与 TCP 状态等诊断信息：
+
+```bash
+# Linux / macOS
+IWAN_DEBUG=1 ./iwan-client-oidc --connect --socks
+```
+
+```powershell
+# Windows PowerShell
+$env:IWAN_DEBUG = "1"
+.\iwan-client-oidc-windows-x86_64.exe --connect --socks
+```
+
+```bat
+:: Windows CMD
+set IWAN_DEBUG=1
+iwan-client-oidc-windows-x86_64.exe --connect --socks
+```
+
+Windows 上还可用 `setx IWAN_DEBUG 1` 设为用户级永久变量（新开终端生效，`setx IWAN_DEBUG ""` 清除）。
+调试信息输出到标准错误，可重定向保存：`... 2> debug.log`。
+
 ## 命令行参数
 
 | 参数 | 行为 |
