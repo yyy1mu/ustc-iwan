@@ -12,10 +12,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant as StdInstant, SystemTime, UNIX_EPOCH};
 
 use super::flow::{queue_proxy_error, HttpMode, LocalFlow, LocalState, ProxyError};
-use super::{DnsResolver, ProxyConfig, ProxyProtocol};
+use super::{ProxyConfig, ProxyProtocol};
+use crate::core::dns::{spawn_ipv4_query, DnsResolver, DnsResult};
 use crate::core::netstack::{
-    receive_vpn, send_vpn, send_vpn_keepalive, spawn_ipv4_query, DnsResult, IpTunnelDevice,
-    VPN_KEEPALIVE_INTERVAL,
+    receive_vpn, send_vpn, send_vpn_keepalive, IpTunnelDevice, VPN_KEEPALIVE_INTERVAL,
 };
 use crate::core::{protocol, util};
 

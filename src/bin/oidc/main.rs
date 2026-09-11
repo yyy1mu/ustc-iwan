@@ -179,7 +179,7 @@ fn connect_server(cli: &cli::Cli, config: &LocalConfig) -> Result<()> {
         anyhow::bail!("no servers in config");
     }
 
-    let dns = iwan::core::local_proxy::DnsResolver::parse(&cli.dns)
+    let dns = iwan::core::dns::DnsResolver::parse(&cli.dns)
         .with_context(|| format!("invalid --dns value {:?}", cli.dns))?;
     let srv = select_server(&config.servers, cli.server.as_deref())?;
     anyhow::ensure!(!srv.host.is_empty(), "selected server has no host");
@@ -281,7 +281,7 @@ fn run_local_proxy(
     sock: &std::net::UdpSocket,
     xor_key: &[u8],
     auth_result: &auth::AuthResult,
-    dns: iwan::core::local_proxy::DnsResolver,
+    dns: iwan::core::dns::DnsResolver,
 ) -> Result<()> {
     let inner_ip = auth_result
         .tun

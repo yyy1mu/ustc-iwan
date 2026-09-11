@@ -4,7 +4,7 @@ use std::io::Read;
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 use std::num::NonZeroU16;
 use std::sync::mpsc::Sender;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 pub const DEFAULT_DNS: &str = "114.114.114.114:53";
@@ -154,27 +154,36 @@ fn udp_query(query: &[u8], addr: SocketAddr) -> Result<Vec<u8>> {
     Ok(response)
 }
 
+fn dot_config() -> &'static Arc<rustls::ClientConfig> {
+    static CONFIG: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();
+    CONFIG.get_or_init(|| {
+        use rustls::{ClientConfig, RootCertStore};
+
+        let mut roots = RootCertStore::empty();
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let config =
+            ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+                .with_safe_default_protocol_versions()
+                .expect("rustls default protocol versions")
+                .with_root_certificates(roots)
+                .with_no_client_auth();
+        Arc::new(config)
+    })
+}
+
 fn dot_query(query: &[u8], host: &str, port: u16) -> Result<Vec<u8>> {
     use rustls::pki_types::ServerName;
-    use rustls::{ClientConfig, ClientConnection, RootCertStore, Stream};
+    use rustls::{ClientConnection, Stream};
 
     let server_name = ServerName::try_from(host)
         .map_err(|_| anyhow::anyhow!("invalid DNS-over-TLS host: {host}"))?
         .to_owned();
-    let mut roots = RootCertStore::empty();
-    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    let config =
-        ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
-            .with_safe_default_protocol_versions()
-            .context("TLS protocol versions")?
-            .with_root_certificates(roots)
-            .with_no_client_auth();
 
     let mut stream = std::net::TcpStream::connect((host, port)).context("connect DNS-over-TLS")?;
     stream.set_read_timeout(Some(DNS_TIMEOUT))?;
     stream.set_write_timeout(Some(DNS_TIMEOUT))?;
     let mut conn =
-        ClientConnection::new(Arc::new(config), server_name).context("TLS handshake setup")?;
+        ClientConnection::new(dot_config().clone(), server_name).context("TLS handshake setup")?;
     let mut tls = Stream::new(&mut conn, &mut stream);
 
     let mut frame = Vec::with_capacity(2 + query.len());

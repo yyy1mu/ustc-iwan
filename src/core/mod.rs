@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod crypto;
+pub mod dns;
 pub mod gcm;
 pub mod local_proxy;
 pub(crate) mod netstack;

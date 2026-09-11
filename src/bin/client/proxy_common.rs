@@ -1,7 +1,8 @@
 use crate::cli::LocalProxyArgs;
 use anyhow::{Context, Result};
 use iwan::core::auth;
-use iwan::core::local_proxy::{self, DnsResolver, ProxyConfig, ProxyProtocol};
+use iwan::core::dns::DnsResolver;
+use iwan::core::local_proxy::{self, ProxyConfig, ProxyProtocol};
 use std::net::SocketAddr;
 use std::time::Duration;
 

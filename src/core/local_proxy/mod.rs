@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use std::fmt;
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, UdpSocket};
 
-pub use super::netstack::dns::{DnsResolver, DEFAULT_DNS};
+use crate::core::dns::DnsResolver;
 
 use engine::Engine;
 
