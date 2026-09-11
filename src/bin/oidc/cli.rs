@@ -83,4 +83,9 @@ pub struct Cli {
     /// DNS resolver for SOCKS5/HTTP domain requests: ip[:port], tls://host[:port] or https://url.
     #[arg(long, default_value = "114.114.114.114:53")]
     pub dns: String,
+
+    /// Bind the tunnel socket to a device (eth0, en0) or local IP.
+    /// Default: the active physical NIC, wired before wireless.
+    #[arg(long)]
+    pub bind: Option<String>,
 }

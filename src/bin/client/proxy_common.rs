@@ -12,7 +12,7 @@ pub fn run(args: &LocalProxyArgs, protocol: ProxyProtocol, listen: SocketAddr) -
     let ct = auth::get_ct(&args.user, &args.pass, args.ct_pass.as_deref())?;
     let nonce = auth::rand_u32()?;
     let open = auth::build_open(&args.user, &ct, args.mtu, args.encrypt, nonce);
-    let sock = auth::udp_connect(&args.server, args.port, 3000)?;
+    let sock = auth::udp_connect(&args.server, args.port, 3000, args.bind.as_deref())?;
 
     let authenticated = {
         let mut result = None;

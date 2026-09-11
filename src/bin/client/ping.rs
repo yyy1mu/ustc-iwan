@@ -1,16 +1,10 @@
 use crate::cli;
 use anyhow::{Context, Result};
-use iwan::core::{crypto, protocol};
+use iwan::core::{auth, crypto, protocol};
 use std::time::Instant;
 
 pub fn run(args: &cli::PingArgs) -> Result<()> {
-    let addr: std::net::SocketAddr = format!("{}:{}", args.server, args.port)
-        .parse()
-        .context("invalid server address")?;
-    let sock = std::net::UdpSocket::bind("0.0.0.0:0").context("bind UDP")?;
-    sock.connect(addr).context("connect UDP")?;
-    sock.set_read_timeout(Some(std::time::Duration::from_millis(3000)))
-        .ok();
+    let sock = auth::udp_connect(&args.server, args.port, 3000, args.bind.as_deref())?;
 
     let h = protocol::pkhdr(protocol::PT_PING_REQ, 0, 0xFFFF, 0xFFFF_FFFF);
     let pkt = protocol::ctrl_pkt(&h, &[]);

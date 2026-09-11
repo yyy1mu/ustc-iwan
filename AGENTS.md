@@ -24,6 +24,7 @@ src/core/                    客户端与服务端共享逻辑
   util.rs                    IWAN_DEBUG、ip 命令封装
   tun_proxy.rs / route.rs / tun.rs   TUN 数据面与路由（仅 Linux，cfg 门控）
   dns.rs                     域名解析（UDP/DoT/DoH，公共 API）
+  netif.rs                   物理网卡检测与 UDP 套接字绑定（跨平台）
   netstack/                  smoltcp 胶水层（device/tunnel，crate 内部）
 src/bin/client/              手动客户端（cli/auth/ping/proxy/socks/http）
 src/bin/oidc/                OIDC 客户端（cli/controller/oidc + main 流程）
@@ -55,7 +56,7 @@ cargo zigbuild --bin iwan-client --target x86_64-unknown-linux-gnu.2.17 --releas
 ```bash
 cargo fmt --check                    # 当前通过，使用默认 rustfmt 配置（无 rustfmt.toml）
 cargo clippy --all-targets           # 当前无警告（无 clippy.toml，CI 不跑 lint）
-cargo test                           # 单元测试，当前 18 个全过
+cargo test                           # 单元测试，当前 21 个全过
 cargo check                          # Rust 无独立 typecheck，用 check/clippy 代替
 ```
 

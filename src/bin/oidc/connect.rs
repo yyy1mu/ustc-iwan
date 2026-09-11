@@ -139,7 +139,7 @@ pub(crate) fn connect_server(cli: &cli::Cli, config: &LocalConfig) -> Result<()>
     #[cfg(not(target_os = "linux"))]
     let open_mtu = 1400u16;
     let open = auth::build_open(&srv.username, &ct, open_mtu, cli.encrypt, nonce);
-    let sock = auth::udp_connect(&srv.host, srv.port, 3000)?;
+    let sock = auth::udp_connect(&srv.host, srv.port, 3000, cli.bind.as_deref())?;
 
     let auth_result = {
         let mut result = None;

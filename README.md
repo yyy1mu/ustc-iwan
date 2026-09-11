@@ -200,6 +200,30 @@ sudo sysctl -w net.core.wmem_max=16777216
 
 用 `IWAN_DEBUG=1` 运行时会打印实际生效的 `rcvbuf`/`sndbuf`，便于确认是否被钳制。
 
+## 网络接口绑定
+
+客户端默认把连接服务器的 UDP 套接字绑定到**当前活跃的物理网卡** IPv4 地址：
+优先有线网卡，其次无线网卡；虚拟网卡（VPN/TUN、docker、veth 等）会被排除。
+连接时会打印实际选择，例如：
+
+```text
+  bind en0 (192.168.1.5)
+```
+
+需要指定其他网卡或地址时使用 `--bind`：
+
+```bash
+./iwan-client-oidc --connect --bind eth0          # 按网卡名（Linux）
+./iwan-client-oidc --connect --bind en0           # 按网卡名（macOS）
+./iwan-client-oidc --connect --bind 192.168.1.5   # 按本机 IP
+./iwan-client-oidc --connect --bind 0.0.0.0       # 交还内核按路由选择
+```
+
+`iwan-client` 的 `ping`/`auth`/`proxy`/`socks`/`http` 子命令同样支持 `--bind`。
+按网卡名绑定时，Linux 会额外尝试 `SO_BINDTODEVICE` 锁定出口（需要
+`CAP_NET_ADMIN`，失败时仅保留源地址绑定并打印警告），macOS 使用
+`IP_BOUND_IF`，Windows 使用源地址绑定。
+
 ## 命令行参数
 
 | 参数 | 行为 |
@@ -213,6 +237,7 @@ sudo sysctl -w net.core.wmem_max=16777216
 | `--socks-listen <addr>` / `--http-listen <addr>` | 代理监听地址，默认 `127.0.0.1:1080` / `127.0.0.1:8080`。 |
 | `--proxy-mtu <mtu>` | 用户态内层 MTU，默认 `1380`。 |
 | `--dns <resolver>` | SOCKS5/HTTP 的域名解析器。 |
+| `--bind <网卡\|IP>` | 绑定隧道 UDP 套接字的出口网卡或源地址，默认活跃物理网卡（有线优先）。 |
 | `--config-dir <dir>` | 配置目录，默认 `~/.config/iwan`。 |
 | `--tun <name>` | TUN 设备名（Linux），默认 `iwan0`。 |
 | `--tun-mtu <mtu>` | TUN 协商 MTU（Linux），默认 `1400`。 |

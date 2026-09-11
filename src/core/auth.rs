@@ -76,11 +76,24 @@ pub fn parse_ack(buf: &[u8], expect_nonce: u32) -> Result<AuthResult> {
     })
 }
 
-pub fn udp_connect(host: &str, port: u16, timeout_ms: u64) -> Result<std::net::UdpSocket> {
+pub fn udp_connect(
+    host: &str,
+    port: u16,
+    timeout_ms: u64,
+    bind: Option<&str>,
+) -> Result<std::net::UdpSocket> {
     let a: std::net::SocketAddr = format!("{host}:{port}")
         .parse()
         .context("invalid address")?;
-    let s = std::net::UdpSocket::bind("0.0.0.0:0").context("bind UDP")?;
+    let target = super::netif::resolve(bind)?;
+    let s =
+        std::net::UdpSocket::bind(target.addr).with_context(|| format!("bind UDP on {target}"))?;
+    if let Some(device) = &target.device {
+        super::netif::pin_to_device(&s, device);
+    }
+    if target.device.is_some() || !target.addr.ip().is_unspecified() {
+        eprintln!("  bind {target}");
+    }
     s.connect(a).context("connect UDP")?;
     enlarge_udp_buffers(&s);
     s.set_read_timeout(Some(Duration::from_millis(timeout_ms)))

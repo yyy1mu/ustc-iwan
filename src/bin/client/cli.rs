@@ -29,6 +29,9 @@ pub struct PingArgs {
     pub server: String,
     #[arg(long, default_value = "6001")]
     pub port: u16,
+    /// Bind to a device (eth0, en0) or local IP. Default: active physical NIC.
+    #[arg(long)]
+    pub bind: Option<String>,
 }
 
 #[derive(Parser)]
@@ -47,6 +50,9 @@ pub struct AuthArgs {
     pub encrypt: u8,
     #[arg(long, default_value = "1400")]
     pub mtu: u16,
+    /// Bind to a device (eth0, en0) or local IP. Default: active physical NIC.
+    #[arg(long)]
+    pub bind: Option<String>,
 }
 
 #[cfg(target_os = "linux")]
@@ -66,6 +72,9 @@ pub struct ProxyArgs {
     pub encrypt: u8,
     #[arg(long, default_value = "1400")]
     pub mtu: u16,
+    /// Bind to a device (eth0, en0) or local IP. Default: active physical NIC.
+    #[arg(long)]
+    pub bind: Option<String>,
     #[arg(long, default_value = "iwan0")]
     pub tun: String,
     #[arg(long, value_delimiter = ',')]
@@ -95,6 +104,9 @@ pub struct LocalProxyArgs {
     /// DNS resolver for domain requests: ip[:port], tls://host[:port] or https://url.
     #[arg(long, default_value = "114.114.114.114:53")]
     pub dns: String,
+    /// Bind to a device (eth0, en0) or local IP. Default: active physical NIC.
+    #[arg(long)]
+    pub bind: Option<String>,
 }
 
 #[derive(Parser)]

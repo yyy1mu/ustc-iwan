@@ -3,6 +3,7 @@ pub mod crypto;
 pub mod dns;
 pub mod gcm;
 pub mod local_proxy;
+pub mod netif;
 pub(crate) mod netstack;
 pub mod protocol;
 #[cfg(target_os = "linux")]

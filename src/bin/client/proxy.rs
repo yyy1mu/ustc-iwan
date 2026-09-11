@@ -4,7 +4,7 @@ use iwan::core::{auth, crypto, tun, tun_proxy};
 use std::time::Duration;
 
 pub fn run(args: &cli::ProxyArgs, nonce: u32, open: Vec<u8>) -> Result<()> {
-    let sock = auth::udp_connect(&args.server, args.port, 3000)?;
+    let sock = auth::udp_connect(&args.server, args.port, 3000, args.bind.as_deref())?;
 
     let auth = {
         let mut result = None;
