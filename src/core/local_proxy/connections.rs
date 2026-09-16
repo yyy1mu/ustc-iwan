@@ -1,22 +1,40 @@
 use anyhow::{Context, Result};
 use smoltcp::iface::{Interface, SocketSet};
-use smoltcp::socket::tcp;
+use smoltcp::socket::{tcp, udp as smol_udp};
 use smoltcp::time::{Duration as SmolDuration, Instant};
 use smoltcp::wire::{IpAddress, IpCidr, IpEndpoint};
 use std::collections::{HashMap, HashSet};
 use std::io::ErrorKind;
 use std::net::{Ipv4Addr, TcpListener};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::time::Duration;
+use std::time::{Duration, Instant as StdInstant};
 
 use super::flow::{queue_proxy_error, HttpMode, LocalFlow, LocalState, ProxyError, Step};
-use super::{http, socks, DnsResolver, ProxyConfig, ProxyProtocol};
+use super::{http, socks, udp, DnsResolver, ProxyConfig, ProxyProtocol};
 use crate::core::dns::{spawn_ipv4_query, DnsResult};
 use crate::core::netstack::IpTunnelDevice;
 use crate::core::util;
 
 const TCP_BUFFER_SIZE: usize = 256 * 1024;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+const IPV4_UDP_HEADER_SIZE: usize = 28;
+const UDP_BURST_LIMIT: usize = 64;
+
+enum DnsContext {
+    Tcp { flow_id: u64, port: u16 },
+    Udp,
+}
+
+struct PendingUdpDatagram {
+    flow_id: u64,
+    port: u16,
+    payload: Vec<u8>,
+}
+
+struct CachedDns {
+    address: Ipv4Addr,
+    expires_at: StdInstant,
+}
 
 /// The userspace TCP/IP stack: the smoltcp interface, its sockets and the
 /// local proxy connections riding on them.
@@ -25,13 +43,17 @@ pub(super) struct Connections<'a> {
     iface: Interface,
     sockets: SocketSet<'a>,
     flows: HashMap<u64, LocalFlow>,
+    udp_associations: HashMap<u64, udp::Association>,
     allocated_ports: HashSet<u16>,
     next_flow: u64,
     next_port: u16,
     dns: DnsResolver,
-    dns_tx: Sender<DnsResult>,
-    dns_rx: Receiver<DnsResult>,
+    dns_tx: Sender<DnsResult<DnsContext>>,
+    dns_rx: Receiver<DnsResult<DnsContext>>,
+    pending_udp_dns: HashMap<String, Vec<PendingUdpDatagram>>,
+    udp_dns_cache: HashMap<String, CachedDns>,
     inner_ip: Ipv4Addr,
+    max_udp_payload: usize,
     protocol: ProxyProtocol,
 }
 
@@ -57,13 +79,17 @@ impl<'a> Connections<'a> {
             iface,
             sockets: SocketSet::new(Vec::new()),
             flows: HashMap::new(),
+            udp_associations: HashMap::new(),
             allocated_ports: HashSet::new(),
             next_flow: 1,
             next_port: 49152,
             dns: config.dns.clone(),
             dns_tx,
             dns_rx,
+            pending_udp_dns: HashMap::new(),
+            udp_dns_cache: HashMap::new(),
             inner_ip: config.inner_ip,
+            max_udp_payload: config.mtu.saturating_sub(IPV4_UDP_HEADER_SIZE),
             protocol: config.protocol,
         })
     }
@@ -157,36 +183,128 @@ impl<'a> Connections<'a> {
                 }
                 self.open_remote(id, &host, port);
             }
+            Step::UdpAssociate {
+                client_port,
+                consumed,
+            } => {
+                if let Some(flow) = self.flows.get_mut(&id) {
+                    flow.input.drain(..consumed);
+                    flow.input.clear();
+                }
+                self.open_udp_association(id, client_port);
+            }
         }
     }
 
     pub(super) fn handle_dns(&mut self) {
-        while let Ok(answer) = self.dns_rx.try_recv() {
-            let resolving = matches!(
-                self.flows.get(&answer.flow_id),
-                Some(flow) if matches!(flow.state, LocalState::Resolving)
-            );
-            if !resolving {
-                continue;
-            }
-            match answer.result {
-                Ok(remote) => {
-                    if util::debug_enabled() {
-                        eprintln!(
-                            "[flow {}] DNS {} -> {}",
-                            answer.flow_id, answer.domain, remote
-                        );
-                    }
-                    self.open_tcp_connection(answer.flow_id, remote, answer.port);
-                }
-                Err(()) => {
-                    eprintln!(
-                        "[flow {}] DNS {} failed via {}",
-                        answer.flow_id, answer.domain, self.dns
+        while let Ok(response) = self.dns_rx.try_recv() {
+            match response.context {
+                DnsContext::Tcp { flow_id, port } => {
+                    let resolving = matches!(
+                        self.flows.get(&flow_id),
+                        Some(flow) if matches!(flow.state, LocalState::Resolving)
                     );
-                    if let Some(flow) = self.flows.get_mut(&answer.flow_id) {
-                        queue_proxy_error(flow, self.protocol, ProxyError::HostUnreachable);
+                    if !resolving {
+                        continue;
                     }
+                    match response.result {
+                        Ok(answer) => {
+                            if util::debug_enabled() {
+                                eprintln!(
+                                    "[flow {flow_id}] DNS {} -> {}",
+                                    response.domain, answer.address
+                                );
+                            }
+                            self.open_tcp_connection(flow_id, answer.address, port);
+                        }
+                        Err(()) => {
+                            eprintln!(
+                                "[flow {flow_id}] DNS {} failed via {}",
+                                response.domain, self.dns
+                            );
+                            if let Some(flow) = self.flows.get_mut(&flow_id) {
+                                queue_proxy_error(flow, self.protocol, ProxyError::HostUnreachable);
+                            }
+                        }
+                    }
+                }
+                DnsContext::Udp => {
+                    let domain = response.domain.trim_end_matches('.').to_ascii_lowercase();
+                    let pending = self.pending_udp_dns.remove(&domain).unwrap_or_default();
+                    match response.result {
+                        Ok(resolved) => {
+                            if !resolved.ttl.is_zero() {
+                                self.udp_dns_cache.insert(
+                                    domain,
+                                    CachedDns {
+                                        address: resolved.address,
+                                        expires_at: StdInstant::now() + resolved.ttl,
+                                    },
+                                );
+                            }
+                            for datagram in pending {
+                                self.send_udp_datagram(
+                                    datagram.flow_id,
+                                    resolved.address,
+                                    datagram.port,
+                                    &datagram.payload,
+                                );
+                            }
+                        }
+                        Err(()) if util::debug_enabled() => {
+                            eprintln!("UDP target DNS {} failed via {}", response.domain, self.dns)
+                        }
+                        Err(()) => {}
+                    }
+                }
+            }
+        }
+    }
+
+    pub(super) fn service_udp_inputs(&mut self) {
+        let mut received = Vec::new();
+        for (id, association) in self.udp_associations.iter_mut() {
+            for _ in 0..UDP_BURST_LIMIT {
+                match association.receive(self.max_udp_payload) {
+                    Ok(Some(datagram)) => received.push((*id, datagram)),
+                    Ok(None) => break,
+                    Err(error) => {
+                        eprintln!("[flow {id}] UDP relay receive failed: {error:#}");
+                        if let Some(flow) = self.flows.get_mut(id) {
+                            flow.set_state(LocalState::Closing);
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
+        for (flow_id, datagram) in received {
+            match datagram.target {
+                udp::Target::Ipv4(remote, port) => {
+                    self.send_udp_datagram(flow_id, remote, port, &datagram.payload)
+                }
+                udp::Target::Domain(domain, port) => {
+                    self.resolve_udp_domain(flow_id, domain, port, datagram.payload)
+                }
+            }
+        }
+    }
+
+    pub(super) fn service_udp_outputs(&mut self) {
+        for (id, association) in self.udp_associations.iter_mut() {
+            for _ in 0..UDP_BURST_LIMIT {
+                let socket = self
+                    .sockets
+                    .get_mut::<smol_udp::Socket>(association.tunnel_handle());
+                match socket.recv() {
+                    Ok((payload, metadata)) => {
+                        if let Err(error) = association.send_response(metadata.endpoint, payload) {
+                            eprintln!("[flow {id}] UDP relay send failed: {error:#}");
+                            break;
+                        }
+                    }
+                    Err(_) => break,
                 }
             }
         }
@@ -252,6 +370,7 @@ impl<'a> Connections<'a> {
     pub(super) fn reap(&mut self) {
         reap_dead_flows(
             &mut self.flows,
+            &mut self.udp_associations,
             &mut self.sockets,
             &mut self.allocated_ports,
         );
@@ -263,6 +382,11 @@ impl<'a> Connections<'a> {
                 self.sockets.get_mut::<tcp::Socket>(handle).abort();
             }
         }
+        for association in self.udp_associations.values() {
+            self.sockets
+                .get_mut::<smol_udp::Socket>(association.tunnel_handle())
+                .close();
+        }
     }
 
     fn open_remote(&mut self, id: u64, host: &str, port: u16) {
@@ -273,7 +397,103 @@ impl<'a> Connections<'a> {
                 if let Some(flow) = self.flows.get_mut(&id) {
                     flow.set_state(LocalState::Resolving);
                 }
-                spawn_ipv4_query(id, name, port, self.dns.clone(), self.dns_tx.clone());
+                spawn_ipv4_query(
+                    name,
+                    self.dns.clone(),
+                    DnsContext::Tcp { flow_id: id, port },
+                    self.dns_tx.clone(),
+                );
+            }
+        }
+    }
+
+    fn open_udp_association(&mut self, id: u64, requested_port: u16) {
+        let Some(local_port) = allocate_port(&self.allocated_ports, self.next_port) else {
+            self.queue_error(id, ProxyError::GeneralFailure);
+            return;
+        };
+        if self.max_udp_payload == 0 {
+            self.queue_error(id, ProxyError::GeneralFailure);
+            return;
+        }
+        let socket = match udp::new_tunnel_socket(local_port, self.max_udp_payload) {
+            Ok(socket) => socket,
+            Err(error) => {
+                eprintln!("[flow {id}] create UDP socket failed: {error:#}");
+                self.queue_error(id, ProxyError::GeneralFailure);
+                return;
+            }
+        };
+        let tunnel_handle = self.sockets.add(socket);
+        let association = {
+            let Some(flow) = self.flows.get(&id) else {
+                self.sockets.remove(tunnel_handle);
+                return;
+            };
+            udp::Association::bind(&flow.stream, requested_port, tunnel_handle)
+        };
+        let (association, relay_addr) = match association {
+            Ok(association) => association,
+            Err(error) => {
+                self.sockets.remove(tunnel_handle);
+                eprintln!("[flow {id}] create UDP relay failed: {error:#}");
+                self.queue_error(id, ProxyError::GeneralFailure);
+                return;
+            }
+        };
+
+        self.next_port = local_port.wrapping_add(1).max(49152);
+        self.allocated_ports.insert(local_port);
+        self.udp_associations.insert(id, association);
+        if let Some(flow) = self.flows.get_mut(&id) {
+            flow.local_port = local_port;
+            flow.queue(&socks::udp_associate_reply(relay_addr));
+            flow.set_state(LocalState::UdpAssociate);
+        }
+        if util::debug_enabled() {
+            eprintln!("[flow {id}] UDP relay {relay_addr}, inner port {local_port}");
+        }
+    }
+
+    fn resolve_udp_domain(&mut self, flow_id: u64, domain: String, port: u16, payload: Vec<u8>) {
+        let domain = domain.trim_end_matches('.').to_ascii_lowercase();
+        let now = StdInstant::now();
+        self.udp_dns_cache
+            .retain(|_, cached| cached.expires_at > now);
+        if let Some(address) = self.udp_dns_cache.get(&domain).map(|cached| cached.address) {
+            self.send_udp_datagram(flow_id, address, port, &payload);
+            return;
+        }
+
+        let pending = PendingUdpDatagram {
+            flow_id,
+            port,
+            payload,
+        };
+        if let Some(datagrams) = self.pending_udp_dns.get_mut(&domain) {
+            datagrams.push(pending);
+            return;
+        }
+        self.pending_udp_dns.insert(domain.clone(), vec![pending]);
+        spawn_ipv4_query(
+            domain,
+            self.dns.clone(),
+            DnsContext::Udp,
+            self.dns_tx.clone(),
+        );
+    }
+
+    fn send_udp_datagram(&mut self, flow_id: u64, remote: Ipv4Addr, port: u16, payload: &[u8]) {
+        let Some(association) = self.udp_associations.get(&flow_id) else {
+            return;
+        };
+        let socket = self
+            .sockets
+            .get_mut::<smol_udp::Socket>(association.tunnel_handle());
+        let endpoint = IpEndpoint::new(IpAddress::Ipv4(remote), port);
+        if let Err(error) = socket.send_slice(payload, endpoint) {
+            if util::debug_enabled() {
+                eprintln!("[flow {flow_id}] drop UDP datagram to {remote}:{port}: {error}");
             }
         }
     }
@@ -347,6 +567,7 @@ fn allocate_port(allocated: &HashSet<u16>, start: u16) -> Option<u16> {
 
 fn reap_dead_flows(
     flows: &mut HashMap<u64, LocalFlow>,
+    udp_associations: &mut HashMap<u64, udp::Association>,
     sockets: &mut SocketSet<'_>,
     allocated_ports: &mut HashSet<u16>,
 ) {
@@ -372,6 +593,9 @@ fn reap_dead_flows(
             if let Some(handle) = flow.socket {
                 sockets.remove(handle);
             }
+            if let Some(association) = udp_associations.remove(&id) {
+                sockets.remove(association.tunnel_handle());
+            }
         }
         if util::debug_enabled() {
             eprintln!("[flow {id}] closed");
@@ -384,7 +608,7 @@ mod tests {
     use super::*;
     use smoltcp::iface::Config;
     use smoltcp::wire::HardwareAddress;
-    use std::net::TcpStream;
+    use std::net::{Shutdown, TcpStream, UdpSocket};
 
     #[test]
     fn classifies_host_targets() {
@@ -407,7 +631,13 @@ mod tests {
         flows.insert(7u64, flow);
         let mut sockets = SocketSet::new(vec![]);
         let mut allocated_ports = HashSet::new();
-        reap_dead_flows(&mut flows, &mut sockets, &mut allocated_ports);
+        let mut udp_associations = HashMap::new();
+        reap_dead_flows(
+            &mut flows,
+            &mut udp_associations,
+            &mut sockets,
+            &mut allocated_ports,
+        );
         assert!(flows.is_empty());
     }
 
@@ -448,5 +678,83 @@ mod tests {
         assert_eq!(packet[0] >> 4, 4);
         assert_eq!(packet[9], 6);
         assert_ne!(packet[20 + 13] & 0x02, 0);
+    }
+
+    #[test]
+    fn udp_associate_forwards_and_reaps_client_datagrams() {
+        let mut device = IpTunnelDevice::new(1380);
+        let mut iface_config = Config::new(HardwareAddress::Ip);
+        iface_config.random_seed = 1;
+        let timestamp = Instant::from_millis(0);
+        let iface = Interface::new(iface_config, &mut device, timestamp);
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let config = ProxyConfig {
+            listen: listener.local_addr().unwrap(),
+            protocol: ProxyProtocol::Socks5,
+            inner_ip: Ipv4Addr::new(10, 8, 0, 2),
+            gateway: Ipv4Addr::new(100, 100, 1, 1),
+            mtu: 1380,
+            xor_key: &[],
+            sid: 1,
+            token: 2,
+            encryption: 0,
+            dns: DnsResolver::parse("1.1.1.1").unwrap(),
+        };
+        let mut connections = Connections::new(listener, iface, &config).unwrap();
+
+        let control_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let control_client = TcpStream::connect(control_listener.local_addr().unwrap()).unwrap();
+        let (control_server, _) = control_listener.accept().unwrap();
+        let mut flow = LocalFlow::new(control_server, ProxyProtocol::Socks5).unwrap();
+        flow.input
+            .extend_from_slice(&[5, 1, 0, 5, 3, 0, 1, 0, 0, 0, 0, 0, 0]);
+        connections.flows.insert(7, flow);
+        connections.process_request(7);
+        connections.process_request(7);
+
+        let flow = &connections.flows[&7];
+        assert!(matches!(flow.state, LocalState::UdpAssociate));
+        let reply: Vec<u8> = flow.output.iter().copied().collect();
+        assert_eq!(&reply[..6], &[5, 0, 5, 0, 0, 1]);
+        let relay = std::net::SocketAddr::from((
+            Ipv4Addr::new(reply[6], reply[7], reply[8], reply[9]),
+            u16::from_be_bytes([reply[10], reply[11]]),
+        ));
+
+        let client = UdpSocket::bind("127.0.0.1:0").unwrap();
+        client
+            .send_to(&[0, 0, 0, 1, 1, 1, 1, 1, 0, 53, 9, 8, 7], relay)
+            .unwrap();
+        connections.service_udp_inputs();
+        connections.poll(&mut device, timestamp);
+
+        let packet = device.pop_tx_packet().expect("associated UDP packet");
+        assert_eq!(packet[9], 17);
+        assert_eq!(&packet[16..20], &[1, 1, 1, 1]);
+        assert_eq!(u16::from_be_bytes([packet[22], packet[23]]), 53);
+        assert_eq!(&packet[28..], &[9, 8, 7]);
+
+        connections.udp_dns_cache.insert(
+            "example.com".to_string(),
+            CachedDns {
+                address: Ipv4Addr::new(1, 1, 1, 1),
+                expires_at: StdInstant::now() + Duration::from_secs(60),
+            },
+        );
+        connections.resolve_udp_domain(7, "Example.COM.".to_string(), 443, vec![6, 5, 4]);
+        connections.poll(&mut device, timestamp);
+        let packet = device.pop_tx_packet().expect("cached domain UDP packet");
+        assert_eq!(&packet[16..20], &[1, 1, 1, 1]);
+        assert_eq!(u16::from_be_bytes([packet[22], packet[23]]), 443);
+        assert_eq!(&packet[28..], &[6, 5, 4]);
+
+        connections.flows.get_mut(&7).unwrap().output.clear();
+        control_client.shutdown(Shutdown::Both).unwrap();
+        connections.service_inputs();
+        connections.reap();
+        assert!(!connections.flows.contains_key(&7));
+        assert!(!connections.udp_associations.contains_key(&7));
+        assert!(connections.allocated_ports.is_empty());
     }
 }

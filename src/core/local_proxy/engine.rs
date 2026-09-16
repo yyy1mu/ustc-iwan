@@ -105,8 +105,10 @@ impl<'a> Engine<'a> {
             self.session_started,
         )?;
         self.connections.service_inputs();
+        self.connections.service_udp_inputs();
         self.connections.handle_dns();
         self.connections.poll(&mut self.device, now());
+        self.connections.service_udp_outputs();
         self.connections.update_states();
         self.connections.service_outputs();
         self.send_to_server()?;

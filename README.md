@@ -8,7 +8,7 @@ USTC iWAN 命令行客户端：通过统一身份认证（OIDC）获取线路配
 | SOCKS5 代理 | Linux / macOS / Windows | 否 | 用户态 TCP/IP 栈，默认监听 1080 |
 | HTTP 代理 | Linux / macOS / Windows | 否 | 用户态 TCP/IP 栈，默认监听 8080 |
 
-SOCKS5/HTTP 模式由 smoltcp 在用户态生成完整的 TCP/IPv4 数据包，不创建网卡、不修改系统路由。
+SOCKS5/HTTP 模式由 smoltcp 在用户态生成完整的 IPv4 数据包，不创建网卡、不修改系统路由。
 
 仓库包含三个二进制：
 
@@ -167,8 +167,9 @@ sudo ./iwan-client-oidc --connect --proxy-cidr 0.0.0.0/0
 curl --socks5-hostname 127.0.0.1:1080 https://www.example.com/
 ```
 
-默认监听 `127.0.0.1:1080`，可用 `--socks-listen` 修改。支持 `CONNECT`、IPv4 地址目标和
-域名目标；不支持 IPv6、`BIND` 或 `UDP ASSOCIATE`（会收到对应的错误响应）。
+默认监听 `127.0.0.1:1080`，可用 `--socks-listen` 修改。支持 `CONNECT`、`UDP ASSOCIATE`、
+IPv4 地址目标和域名目标。UDP 关联随对应的 TCP 控制连接关闭而释放；不支持 UDP 分片或
+IPv6 目标，超过内层 MTU 的数据报会被丢弃。`BIND` 仍会收到不支持的错误响应。
 
 ### HTTP 代理
 

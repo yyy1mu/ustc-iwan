@@ -96,32 +96,34 @@ fn parse_dns_port(port: &str, spec: &str) -> Result<NonZeroU16> {
     NonZeroU16::new(port).ok_or_else(|| anyhow::anyhow!("invalid DNS port in {spec}"))
 }
 
-pub(crate) struct DnsResult {
-    pub(crate) flow_id: u64,
+pub(crate) struct DnsResult<T> {
+    pub(crate) context: T,
     pub(crate) domain: String,
-    pub(crate) port: u16,
-    pub(crate) result: std::result::Result<Ipv4Addr, ()>,
+    pub(crate) result: std::result::Result<DnsAnswer, ()>,
 }
 
-pub(crate) fn spawn_ipv4_query(
-    flow_id: u64,
+pub(crate) struct DnsAnswer {
+    pub(crate) address: Ipv4Addr,
+    pub(crate) ttl: Duration,
+}
+
+pub(crate) fn spawn_ipv4_query<T: Send + 'static>(
     domain: String,
-    port: u16,
     resolver: DnsResolver,
-    sender: Sender<DnsResult>,
+    context: T,
+    sender: Sender<DnsResult<T>>,
 ) {
     std::thread::spawn(move || {
         let result = resolve_ipv4(&domain, &resolver).map_err(|_| ());
         let _ = sender.send(DnsResult {
-            flow_id,
+            context,
             domain,
-            port,
             result,
         });
     });
 }
 
-fn resolve_ipv4(domain: &str, resolver: &DnsResolver) -> Result<Ipv4Addr> {
+fn resolve_ipv4(domain: &str, resolver: &DnsResolver) -> Result<DnsAnswer> {
     let query_id = rand::random();
     let query = build_a_query(query_id, domain)?;
     let response = match resolver {
@@ -245,7 +247,7 @@ fn build_a_query(id: u16, domain: &str) -> Result<Vec<u8>> {
     Ok(query)
 }
 
-fn parse_a_response(id: u16, packet: &[u8]) -> Result<Ipv4Addr> {
+fn parse_a_response(id: u16, packet: &[u8]) -> Result<DnsAnswer> {
     if packet.len() < 12 || u16::from_be_bytes([packet[0], packet[1]]) != id {
         anyhow::bail!("invalid DNS response");
     }
@@ -270,18 +272,27 @@ fn parse_a_response(id: u16, packet: &[u8]) -> Result<Ipv4Addr> {
         }
         let record_type = u16::from_be_bytes([packet[offset], packet[offset + 1]]);
         let class = u16::from_be_bytes([packet[offset + 2], packet[offset + 3]]);
+        let ttl = u32::from_be_bytes([
+            packet[offset + 4],
+            packet[offset + 5],
+            packet[offset + 6],
+            packet[offset + 7],
+        ]);
         let data_len = u16::from_be_bytes([packet[offset + 8], packet[offset + 9]]) as usize;
         offset += 10;
         if offset + data_len > packet.len() {
             anyhow::bail!("truncated DNS record");
         }
         if record_type == 1 && class == 1 && data_len == 4 {
-            return Ok(Ipv4Addr::new(
-                packet[offset],
-                packet[offset + 1],
-                packet[offset + 2],
-                packet[offset + 3],
-            ));
+            return Ok(DnsAnswer {
+                address: Ipv4Addr::new(
+                    packet[offset],
+                    packet[offset + 1],
+                    packet[offset + 2],
+                    packet[offset + 3],
+                ),
+                ttl: Duration::from_secs(u64::from(ttl)),
+            });
         }
         offset += data_len;
     }
@@ -378,10 +389,9 @@ mod tests {
         response.extend_from_slice(&[
             0xc0, 0x0c, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x3c, 0x00, 0x04, 1, 2, 3, 4,
         ]);
-        assert_eq!(
-            parse_a_response(0x1234, &response).unwrap(),
-            Ipv4Addr::new(1, 2, 3, 4)
-        );
+        let answer = parse_a_response(0x1234, &response).unwrap();
+        assert_eq!(answer.address, Ipv4Addr::new(1, 2, 3, 4));
+        assert_eq!(answer.ttl, Duration::from_secs(60));
     }
 
     #[test]

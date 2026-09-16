@@ -3,6 +3,7 @@ mod engine;
 mod flow;
 mod http;
 mod socks;
+mod udp;
 
 use anyhow::{Context, Result};
 use std::fmt;

@@ -69,6 +69,8 @@ pub(super) enum Step {
         mode: Option<HttpMode>,
         rewritten: Option<Vec<u8>>,
     },
+    /// Establish a UDP relay tied to this TCP control connection.
+    UdpAssociate { client_port: u16, consumed: usize },
     /// Reject the request.
     Fail(ProxyError),
 }
@@ -80,6 +82,7 @@ pub(super) enum LocalState {
     Resolving,
     Connecting,
     Established,
+    UdpAssociate,
     Closing,
 }
 
@@ -161,7 +164,9 @@ impl LocalFlow {
                 socket.send_capacity().saturating_sub(socket.send_queue())
             }
             Some(_) => 0,
-            None if self.state.is_handshake() => READ_BUFFER,
+            None if self.state.is_handshake() || matches!(self.state, LocalState::UdpAssociate) => {
+                READ_BUFFER
+            }
             None => 0,
         };
         if max_read == 0 {
@@ -176,12 +181,15 @@ impl LocalFlow {
                 if let Some(handle) = self.socket {
                     sockets.get_mut::<tcp::Socket>(handle).close();
                     self.set_state(LocalState::Closing);
+                } else if matches!(self.state, LocalState::UdpAssociate) {
+                    self.set_state(LocalState::Closing);
                 }
             }
-            Ok(n) if self.socket.is_none() => {
+            Ok(n) if self.state.is_handshake() => {
                 self.input.extend_from_slice(&buf[..n]);
                 return true;
             }
+            Ok(_) if matches!(self.state, LocalState::UdpAssociate) => {}
             Ok(n) => {
                 if let Some(handle) = self.socket {
                     let socket = sockets.get_mut::<tcp::Socket>(handle);
@@ -196,6 +204,8 @@ impl LocalFlow {
                 self.local_eof = true;
                 if let Some(handle) = self.socket {
                     sockets.get_mut::<tcp::Socket>(handle).abort();
+                    self.set_state(LocalState::Closing);
+                } else if matches!(self.state, LocalState::UdpAssociate) {
                     self.set_state(LocalState::Closing);
                 }
             }

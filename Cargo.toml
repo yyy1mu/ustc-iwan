@@ -38,6 +38,7 @@ smoltcp = { version = "0.13", default-features = false, features = [
     "medium-ip",
     "proto-ipv4",
     "socket-tcp",
+    "socket-udp",
 ] }
 
 [profile.release]
