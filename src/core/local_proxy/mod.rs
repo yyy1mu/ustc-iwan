@@ -3,6 +3,7 @@ mod engine;
 mod flow;
 mod http;
 mod socks;
+mod tunnel_dns;
 mod udp;
 
 use anyhow::{Context, Result};

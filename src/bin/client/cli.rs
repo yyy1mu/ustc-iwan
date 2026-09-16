@@ -101,9 +101,9 @@ pub struct LocalProxyArgs {
     pub encrypt: u8,
     #[arg(long, default_value = "1380")]
     pub mtu: u16,
-    /// DNS resolver for domain requests: ip[:port], tls://host[:port] or https://url.
-    #[arg(long, default_value = "114.114.114.114:53")]
-    pub dns: String,
+    /// Override the server-advertised DNS resolver: ip[:port], tls://host[:port] or https://url.
+    #[arg(long)]
+    pub dns: Option<String>,
     /// Bind to a device (eth0, en0) or local IP. Default: active physical NIC.
     #[arg(long)]
     pub bind: Option<String>,

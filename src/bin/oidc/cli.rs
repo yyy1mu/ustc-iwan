@@ -80,9 +80,9 @@ pub struct Cli {
     #[arg(long, default_value = "127.0.0.1:8080")]
     pub http_listen: std::net::SocketAddr,
 
-    /// DNS resolver for SOCKS5/HTTP domain requests: ip[:port], tls://host[:port] or https://url.
-    #[arg(long, default_value = "114.114.114.114:53")]
-    pub dns: String,
+    /// Override the server-advertised DNS resolver: ip[:port], tls://host[:port] or https://url.
+    #[arg(long)]
+    pub dns: Option<String>,
 
     /// Bind the tunnel socket to a device (eth0, en0) or local IP.
     /// Default: the active physical NIC, wired before wireless.

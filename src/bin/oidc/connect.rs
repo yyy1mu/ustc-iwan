@@ -120,8 +120,6 @@ pub(crate) fn connect_server(cli: &cli::Cli, config: &LocalConfig) -> Result<()>
         anyhow::bail!("no servers in config");
     }
 
-    let dns = iwan::core::dns::DnsResolver::parse(&cli.dns)
-        .with_context(|| format!("invalid --dns value {:?}", cli.dns))?;
     let srv = select_server(&config.servers, cli.server.as_deref())?;
     anyhow::ensure!(!srv.host.is_empty(), "selected server has no host");
 
@@ -173,6 +171,8 @@ pub(crate) fn connect_server(cli: &cli::Cli, config: &LocalConfig) -> Result<()>
     let xk: Vec<u8> = sk[..8].to_vec();
 
     if cli.socks || cli.http {
+        let dns = iwan::core::dns::DnsResolver::for_proxy(cli.dns.as_deref(), &auth_result.dns)
+            .with_context(|| format!("invalid --dns value {:?}", cli.dns))?;
         return run_local_proxy(cli, &sock, &xk, &auth_result, dns);
     }
 

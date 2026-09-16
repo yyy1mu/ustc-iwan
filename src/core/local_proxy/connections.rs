@@ -10,6 +10,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant as StdInstant};
 
 use super::flow::{queue_proxy_error, HttpMode, LocalFlow, LocalState, ProxyError, Step};
+use super::tunnel_dns::TunnelDns;
 use super::{http, socks, udp, DnsResolver, ProxyConfig, ProxyProtocol};
 use crate::core::dns::{spawn_ipv4_query, DnsResult};
 use crate::core::netstack::IpTunnelDevice;
@@ -50,6 +51,7 @@ pub(super) struct Connections<'a> {
     dns: DnsResolver,
     dns_tx: Sender<DnsResult<DnsContext>>,
     dns_rx: Receiver<DnsResult<DnsContext>>,
+    tunnel_dns: Option<TunnelDns<DnsContext>>,
     pending_udp_dns: HashMap<String, Vec<PendingUdpDatagram>>,
     udp_dns_cache: HashMap<String, CachedDns>,
     inner_ip: Ipv4Addr,
@@ -74,10 +76,15 @@ impl<'a> Connections<'a> {
             .context("add userspace default route")?;
 
         let (dns_tx, dns_rx) = mpsc::channel();
+        let mut sockets = SocketSet::new(Vec::new());
+        let tunnel_dns = match &config.dns {
+            DnsResolver::Tunnel(server) => Some(TunnelDns::new(*server, &mut sockets)?),
+            _ => None,
+        };
         Ok(Self {
             listener,
             iface,
-            sockets: SocketSet::new(Vec::new()),
+            sockets,
             flows: HashMap::new(),
             udp_associations: HashMap::new(),
             allocated_ports: HashSet::new(),
@@ -86,6 +93,7 @@ impl<'a> Connections<'a> {
             dns: config.dns.clone(),
             dns_tx,
             dns_rx,
+            tunnel_dns,
             pending_udp_dns: HashMap::new(),
             udp_dns_cache: HashMap::new(),
             inner_ip: config.inner_ip,
@@ -197,7 +205,11 @@ impl<'a> Connections<'a> {
     }
 
     pub(super) fn handle_dns(&mut self) {
-        while let Ok(response) = self.dns_rx.try_recv() {
+        let mut responses: Vec<_> = self.dns_rx.try_iter().collect();
+        if let Some(tunnel_dns) = self.tunnel_dns.as_mut() {
+            responses.extend(tunnel_dns.service(&mut self.sockets));
+        }
+        for response in responses {
             match response.context {
                 DnsContext::Tcp { flow_id, port } => {
                     let resolving = matches!(
@@ -387,6 +399,9 @@ impl<'a> Connections<'a> {
                 .get_mut::<smol_udp::Socket>(association.tunnel_handle())
                 .close();
         }
+        if let Some(tunnel_dns) = self.tunnel_dns.as_mut() {
+            tunnel_dns.close(&mut self.sockets);
+        }
     }
 
     fn open_remote(&mut self, id: u64, host: &str, port: u16) {
@@ -397,12 +412,7 @@ impl<'a> Connections<'a> {
                 if let Some(flow) = self.flows.get_mut(&id) {
                     flow.set_state(LocalState::Resolving);
                 }
-                spawn_ipv4_query(
-                    name,
-                    self.dns.clone(),
-                    DnsContext::Tcp { flow_id: id, port },
-                    self.dns_tx.clone(),
-                );
+                self.start_dns(name, DnsContext::Tcp { flow_id: id, port });
             }
         }
     }
@@ -475,12 +485,26 @@ impl<'a> Connections<'a> {
             return;
         }
         self.pending_udp_dns.insert(domain.clone(), vec![pending]);
-        spawn_ipv4_query(
-            domain,
-            self.dns.clone(),
-            DnsContext::Udp,
-            self.dns_tx.clone(),
-        );
+        self.start_dns(domain, DnsContext::Udp);
+    }
+
+    fn start_dns(&mut self, domain: String, context: DnsContext) {
+        if let Some(tunnel_dns) = self.tunnel_dns.as_mut() {
+            if let Err((context, error)) =
+                tunnel_dns.start(domain.clone(), context, &mut self.sockets)
+            {
+                if util::debug_enabled() {
+                    eprintln!("tunneled DNS {domain} failed to start: {error:#}");
+                }
+                let _ = self.dns_tx.send(DnsResult {
+                    context,
+                    domain,
+                    result: Err(()),
+                });
+            }
+        } else {
+            spawn_ipv4_query(domain, self.dns.clone(), context, self.dns_tx.clone());
+        }
     }
 
     fn send_udp_datagram(&mut self, flow_id: u64, remote: Ipv4Addr, port: u16, payload: &[u8]) {
@@ -699,7 +723,7 @@ mod tests {
             sid: 1,
             token: 2,
             encryption: 0,
-            dns: DnsResolver::parse("1.1.1.1").unwrap(),
+            dns: DnsResolver::for_proxy(None, "202.38.64.1").unwrap(),
         };
         let mut connections = Connections::new(listener, iface, &config).unwrap();
 

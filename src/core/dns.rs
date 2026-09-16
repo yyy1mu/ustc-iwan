@@ -1,20 +1,21 @@
 use anyhow::{Context, Result};
 use std::fmt;
 use std::io::Read;
-use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
 use std::num::NonZeroU16;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 pub const DEFAULT_DNS: &str = "114.114.114.114:53";
-const DNS_TIMEOUT: Duration = Duration::from_secs(3);
+pub(crate) const DNS_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Clone, Debug)]
 pub enum DnsResolver {
     Udp(SocketAddr),
     Dot { host: String, port: NonZeroU16 },
     Doh { url: String },
+    Tunnel(SocketAddrV4),
 }
 
 impl DnsResolver {
@@ -45,6 +46,18 @@ impl DnsResolver {
             .with_context(|| format!("invalid DNS resolver: {spec}"))?;
         Ok(Self::Udp(addr))
     }
+
+    /// Select an explicit resolver, otherwise use the server-advertised IPv4
+    /// resolver through the iWAN data plane and finally fall back to DEFAULT_DNS.
+    pub fn for_proxy(override_spec: Option<&str>, server_dns: &str) -> Result<Self> {
+        if let Some(spec) = override_spec {
+            return Self::parse(spec);
+        }
+        let addr = parse_tunnel_resolver(server_dns)
+            .or_else(|| parse_tunnel_resolver(DEFAULT_DNS))
+            .context("invalid default DNS resolver")?;
+        Ok(Self::Tunnel(addr))
+    }
 }
 
 impl fmt::Display for DnsResolver {
@@ -53,8 +66,24 @@ impl fmt::Display for DnsResolver {
             Self::Udp(addr) => write!(f, "{addr}"),
             Self::Dot { host, port } => write!(f, "tls://{host}:{port}"),
             Self::Doh { url } => write!(f, "{url}"),
+            Self::Tunnel(addr) => write!(f, "{addr} via iWAN"),
         }
     }
+}
+
+fn parse_tunnel_resolver(spec: &str) -> Option<SocketAddrV4> {
+    let spec = spec.trim();
+    let addr = if let Ok(addr) = spec.parse::<SocketAddrV4>() {
+        addr
+    } else if let Ok(ip) = spec.parse::<Ipv4Addr>() {
+        SocketAddrV4::new(ip, 53)
+    } else {
+        format!("{spec}:53").parse().ok()?
+    };
+    if addr.ip().is_unspecified() || addr.port() == 0 {
+        return None;
+    }
+    Some(addr)
 }
 
 fn split_host_port(spec: &str, default_port: u16) -> Result<(String, NonZeroU16)> {
@@ -130,6 +159,9 @@ fn resolve_ipv4(domain: &str, resolver: &DnsResolver) -> Result<DnsAnswer> {
         DnsResolver::Udp(addr) => udp_query(&query, *addr)?,
         DnsResolver::Dot { host, port } => dot_query(&query, host, port.get())?,
         DnsResolver::Doh { url } => doh_query(&query, url)?,
+        DnsResolver::Tunnel(_) => {
+            anyhow::bail!("tunneled DNS requires the local proxy data plane")
+        }
     };
     parse_a_response(query_id, &response)
 }
@@ -222,7 +254,7 @@ fn doh_query(query: &[u8], url: &str) -> Result<Vec<u8>> {
     Ok(body)
 }
 
-fn build_a_query(id: u16, domain: &str) -> Result<Vec<u8>> {
+pub(crate) fn build_a_query(id: u16, domain: &str) -> Result<Vec<u8>> {
     let domain = domain.trim_end_matches('.');
     if domain.is_empty() || domain.len() > 253 {
         anyhow::bail!("invalid DNS name");
@@ -247,13 +279,16 @@ fn build_a_query(id: u16, domain: &str) -> Result<Vec<u8>> {
     Ok(query)
 }
 
-fn parse_a_response(id: u16, packet: &[u8]) -> Result<DnsAnswer> {
+pub(crate) fn parse_a_response(id: u16, packet: &[u8]) -> Result<DnsAnswer> {
     if packet.len() < 12 || u16::from_be_bytes([packet[0], packet[1]]) != id {
         anyhow::bail!("invalid DNS response");
     }
     let flags = u16::from_be_bytes([packet[2], packet[3]]);
     if flags & 0x8000 == 0 || flags & 0x000f != 0 {
         anyhow::bail!("DNS query failed");
+    }
+    if flags & 0x0200 != 0 {
+        anyhow::bail!("truncated DNS response");
     }
     let questions = u16::from_be_bytes([packet[4], packet[5]]) as usize;
     let answers = u16::from_be_bytes([packet[6], packet[7]]) as usize;
@@ -375,6 +410,26 @@ mod tests {
         assert!(DnsResolver::parse("https://dns.alidns.com").is_err());
         assert!(DnsResolver::parse("https://:443/dns-query").is_err());
         assert!(DnsResolver::parse("not a resolver").is_err());
+    }
+
+    #[test]
+    fn selects_proxy_resolver_by_precedence() {
+        assert!(matches!(
+            DnsResolver::for_proxy(Some("223.5.5.5"), "202.38.64.1").unwrap(),
+            DnsResolver::Udp(addr) if addr.to_string() == "223.5.5.5:53"
+        ));
+        assert!(matches!(
+            DnsResolver::for_proxy(None, "202.38.64.1").unwrap(),
+            DnsResolver::Tunnel(addr) if addr.to_string() == "202.38.64.1:53"
+        ));
+        assert!(matches!(
+            DnsResolver::for_proxy(None, "").unwrap(),
+            DnsResolver::Tunnel(addr) if addr.to_string() == DEFAULT_DNS
+        ));
+        assert!(matches!(
+            DnsResolver::for_proxy(None, "0.0.0.0").unwrap(),
+            DnsResolver::Tunnel(addr) if addr.to_string() == DEFAULT_DNS
+        ));
     }
 
     #[test]

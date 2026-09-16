@@ -189,8 +189,9 @@ curl -x http://127.0.0.1:8080 http://www.example.com/    # 明文转发
 
 ### 域名解析
 
-SOCKS5/HTTP 模式下，域名由客户端在本机解析为 IPv4 地址，默认使用 `114.114.114.114:53`，
-可用 `--dns` 指定其他解析器：
+SOCKS5/HTTP 模式下，域名由客户端解析为 IPv4 地址。默认优先使用 iWAN 服务端在认证响应中
+下发的 DNS，并通过 iWAN 数据面查询；服务端未返回有效地址时回退到 `114.114.114.114:53`。
+可用 `--dns` 显式覆盖自动选择：
 
 ```text
 --dns 223.5.5.5                         # 普通 UDP（可带端口：223.5.5.5:5353）
@@ -198,7 +199,9 @@ SOCKS5/HTTP 模式下，域名由客户端在本机解析为 IPv4 地址，默�
 --dns https://dns.alidns.com/dns-query  # DNS over HTTPS
 ```
 
-当本机 DNS 被代理工具接管（如 TUN + fake-ip）时，建议改用 DoT 或 DoH，避免解析到假地址。
+显式覆盖的解析器从宿主机网络直接访问；自动选择的服务端 DNS 则在用户态数据面内发出普通
+UDP 查询。这样既可绕开本机 TUN + fake-ip 的透明 DNS 接管，也能保留校园 DNS 对部分校内
+服务提供的专用解析结果；普通 DNS 本身不提供 DoT/DoH 的端到端传输加密。
 
 ### 网络接口绑定
 
@@ -280,7 +283,7 @@ Windows 上还可用 `setx IWAN_DEBUG 1` 设为用户级永久变量（新开终
 | `--socks` / `--http` | 启用用户态 SOCKS5 / HTTP 代理，二者互斥。 |
 | `--socks-listen <addr>` / `--http-listen <addr>` | 代理监听地址，默认 `127.0.0.1:1080` / `127.0.0.1:8080`。 |
 | `--proxy-mtu <mtu>` | 用户态内层 MTU，默认 `1380`。 |
-| `--dns <resolver>` | SOCKS5/HTTP 的域名解析器。 |
+| `--dns <resolver>` | 覆盖 SOCKS5/HTTP 解析器；默认使用服务端下发 DNS 经数据面查询。 |
 | `--bind <网卡\|IP>` | 绑定隧道 UDP 套接字的出口网卡或源地址，默认活跃物理网卡（有线优先）。 |
 | `--config-dir <dir>` | 配置目录，默认 `~/.config/iwan`。 |
 | `--tun <name>` | TUN 设备名（Linux），默认 `iwan0`。 |

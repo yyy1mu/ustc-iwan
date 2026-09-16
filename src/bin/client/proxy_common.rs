@@ -7,8 +7,6 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 pub fn run(args: &LocalProxyArgs, protocol: ProxyProtocol, listen: SocketAddr) -> Result<()> {
-    let dns = DnsResolver::parse(&args.dns)
-        .with_context(|| format!("invalid --dns value {:?}", args.dns))?;
     let ct = auth::get_ct(&args.user, &args.pass, args.ct_pass.as_deref())?;
     let nonce = auth::rand_u32()?;
     let open = auth::build_open(&args.user, &ct, args.mtu, args.encrypt, nonce);
@@ -45,6 +43,8 @@ pub fn run(args: &LocalProxyArgs, protocol: ProxyProtocol, listen: SocketAddr) -
         .context("server returned invalid gateway IPv4 address")?;
     let key = iwan::core::crypto::session_key(&args.user, &args.pass);
     let mtu = usize::from(authenticated.mtu.min(args.mtu));
+    let dns = DnsResolver::for_proxy(args.dns.as_deref(), &authenticated.dns)
+        .with_context(|| format!("invalid --dns value {:?}", args.dns))?;
 
     local_proxy::run(
         &sock,

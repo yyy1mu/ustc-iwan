@@ -106,8 +106,8 @@ impl<'a> Engine<'a> {
         )?;
         self.connections.service_inputs();
         self.connections.service_udp_inputs();
-        self.connections.handle_dns();
         self.connections.poll(&mut self.device, now());
+        self.connections.handle_dns();
         self.connections.service_udp_outputs();
         self.connections.update_states();
         self.connections.service_outputs();
