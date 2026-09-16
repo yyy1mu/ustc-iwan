@@ -6,6 +6,7 @@ use std::io::ErrorKind;
 use std::net::{Ipv4Addr, SocketAddr, TcpStream, UdpSocket};
 
 const PACKET_SLOTS: usize = 64;
+const PAYLOAD_BUFFER_SIZE: usize = 64 * 1024;
 const LOCAL_DATAGRAM_BUFFER_SIZE: usize = u16::MAX as usize;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -50,7 +51,7 @@ impl Association {
                 control_peer,
                 client_addr,
                 receive_buffer: vec![0; LOCAL_DATAGRAM_BUFFER_SIZE],
-                response_buffer: Vec::with_capacity(LOCAL_DATAGRAM_BUFFER_SIZE),
+                response_buffer: Vec::new(),
             },
             relay_addr,
         ))
@@ -70,6 +71,9 @@ impl Association {
             if source.ip() != self.control_peer.ip() {
                 continue;
             }
+            let Some(datagram) = parse_datagram(&self.receive_buffer[..length], max_payload) else {
+                continue;
+            };
             if let Some(client_addr) = self.client_addr {
                 if source != client_addr {
                     continue;
@@ -77,9 +81,7 @@ impl Association {
             } else {
                 self.client_addr = Some(source);
             }
-            if let Some(datagram) = parse_datagram(&self.receive_buffer[..length], max_payload) {
-                return Ok(Some(datagram));
-            }
+            return Ok(Some(datagram));
         }
     }
 
@@ -96,18 +98,14 @@ impl Association {
     }
 }
 
-pub(super) fn new_tunnel_socket(
-    local_port: u16,
-    max_payload: usize,
-) -> Result<udp::Socket<'static>> {
-    let payload_capacity = max_payload.saturating_mul(PACKET_SLOTS);
+pub(super) fn new_tunnel_socket(local_port: u16) -> Result<udp::Socket<'static>> {
     let rx = udp::PacketBuffer::new(
         vec![udp::PacketMetadata::EMPTY; PACKET_SLOTS],
-        vec![0; payload_capacity],
+        vec![0; PAYLOAD_BUFFER_SIZE],
     );
     let tx = udp::PacketBuffer::new(
         vec![udp::PacketMetadata::EMPTY; PACKET_SLOTS],
-        vec![0; payload_capacity],
+        vec![0; PAYLOAD_BUFFER_SIZE],
     );
     let mut socket = udp::Socket::new(rx, tx);
     socket
@@ -213,13 +211,19 @@ mod tests {
         let (control_server, _) = listener.accept().unwrap();
 
         let mut sockets = SocketSet::new(vec![]);
-        let tunnel_handle = sockets.add(new_tunnel_socket(49152, 1352).unwrap());
+        let tunnel_handle = sockets.add(new_tunnel_socket(49152).unwrap());
         let (mut association, relay_addr) =
             Association::bind(&control_server, 0, tunnel_handle).unwrap();
         let client = UdpSocket::bind("127.0.0.1:0").unwrap();
         client
             .set_read_timeout(Some(Duration::from_secs(1)))
             .unwrap();
+
+        let malformed_client = UdpSocket::bind("127.0.0.1:0").unwrap();
+        malformed_client
+            .send_to(&[0, 0, 1, 1, 1, 2, 3, 4, 0, 53, 0], relay_addr)
+            .unwrap();
+        assert_eq!(association.receive(1352).unwrap(), None);
 
         let request = [0, 0, 0, 1, 1, 2, 3, 4, 0, 53, 9, 8];
         client.send_to(&request, relay_addr).unwrap();

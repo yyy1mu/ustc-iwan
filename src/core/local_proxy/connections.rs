@@ -19,6 +19,8 @@ const TCP_BUFFER_SIZE: usize = 256 * 1024;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const IPV4_UDP_HEADER_SIZE: usize = 28;
 const UDP_BURST_LIMIT: usize = 64;
+const MAX_PENDING_UDP_DNS_QUERIES: usize = 64;
+const MAX_DATAGRAMS_PER_DNS_QUERY: usize = 64;
 
 enum DnsContext {
     Tcp { flow_id: u64, port: u16 },
@@ -371,6 +373,7 @@ impl<'a> Connections<'a> {
         reap_dead_flows(
             &mut self.flows,
             &mut self.udp_associations,
+            &mut self.pending_udp_dns,
             &mut self.sockets,
             &mut self.allocated_ports,
         );
@@ -416,7 +419,7 @@ impl<'a> Connections<'a> {
             self.queue_error(id, ProxyError::GeneralFailure);
             return;
         }
-        let socket = match udp::new_tunnel_socket(local_port, self.max_udp_payload) {
+        let socket = match udp::new_tunnel_socket(local_port) {
             Ok(socket) => socket,
             Err(error) => {
                 eprintln!("[flow {id}] create UDP socket failed: {error:#}");
@@ -471,7 +474,17 @@ impl<'a> Connections<'a> {
             payload,
         };
         if let Some(datagrams) = self.pending_udp_dns.get_mut(&domain) {
-            datagrams.push(pending);
+            if datagrams.len() < MAX_DATAGRAMS_PER_DNS_QUERY {
+                datagrams.push(pending);
+            } else if util::debug_enabled() {
+                eprintln!("[flow {flow_id}] drop UDP datagram: DNS queue for {domain} is full");
+            }
+            return;
+        }
+        if self.pending_udp_dns.len() >= MAX_PENDING_UDP_DNS_QUERIES {
+            if util::debug_enabled() {
+                eprintln!("[flow {flow_id}] drop UDP datagram: too many pending DNS queries");
+            }
             return;
         }
         self.pending_udp_dns.insert(domain.clone(), vec![pending]);
@@ -568,6 +581,7 @@ fn allocate_port(allocated: &HashSet<u16>, start: u16) -> Option<u16> {
 fn reap_dead_flows(
     flows: &mut HashMap<u64, LocalFlow>,
     udp_associations: &mut HashMap<u64, udp::Association>,
+    pending_udp_dns: &mut HashMap<String, Vec<PendingUdpDatagram>>,
     sockets: &mut SocketSet<'_>,
     allocated_ports: &mut HashSet<u16>,
 ) {
@@ -587,6 +601,10 @@ fn reap_dead_flows(
             removable.then_some(*id)
         })
         .collect();
+    pending_udp_dns.retain(|_, datagrams| {
+        datagrams.retain(|datagram| !dead.contains(&datagram.flow_id));
+        !datagrams.is_empty()
+    });
     for id in dead {
         if let Some(flow) = flows.remove(&id) {
             allocated_ports.remove(&flow.local_port);
@@ -632,9 +650,11 @@ mod tests {
         let mut sockets = SocketSet::new(vec![]);
         let mut allocated_ports = HashSet::new();
         let mut udp_associations = HashMap::new();
+        let mut pending_udp_dns = HashMap::new();
         reap_dead_flows(
             &mut flows,
             &mut udp_associations,
+            &mut pending_udp_dns,
             &mut sockets,
             &mut allocated_ports,
         );
@@ -749,6 +769,14 @@ mod tests {
         assert_eq!(u16::from_be_bytes([packet[22], packet[23]]), 443);
         assert_eq!(&packet[28..], &[6, 5, 4]);
 
+        connections.pending_udp_dns.insert(
+            "pending.example".to_string(),
+            vec![PendingUdpDatagram {
+                flow_id: 7,
+                port: 53,
+                payload: vec![1, 2, 3],
+            }],
+        );
         connections.flows.get_mut(&7).unwrap().output.clear();
         control_client.shutdown(Shutdown::Both).unwrap();
         connections.service_inputs();
@@ -756,5 +784,6 @@ mod tests {
         assert!(!connections.flows.contains_key(&7));
         assert!(!connections.udp_associations.contains_key(&7));
         assert!(connections.allocated_ports.is_empty());
+        assert!(connections.pending_udp_dns.is_empty());
     }
 }
