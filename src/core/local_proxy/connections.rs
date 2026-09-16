@@ -17,6 +17,8 @@ use crate::core::util;
 
 const TCP_BUFFER_SIZE: usize = 256 * 1024;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+const TCP_KEEP_ALIVE_INTERVAL: SmolDuration = SmolDuration::from_secs(60);
+const TCP_UNRESPONSIVE_TIMEOUT: SmolDuration = SmolDuration::from_secs(600);
 
 /// The userspace TCP/IP stack: the smoltcp interface, its sockets and the
 /// local proxy connections riding on them.
@@ -285,10 +287,7 @@ impl<'a> Connections<'a> {
         };
         self.next_port = local_port.wrapping_add(1).max(49152);
 
-        let rx = tcp::SocketBuffer::new(vec![0; TCP_BUFFER_SIZE]);
-        let tx = tcp::SocketBuffer::new(vec![0; TCP_BUFFER_SIZE]);
-        let mut socket = tcp::Socket::new(rx, tx);
-        socket.set_timeout(Some(SmolDuration::from_secs(120)));
+        let mut socket = new_tcp_socket();
         let endpoint = IpEndpoint::new(IpAddress::Ipv4(remote), remote_port);
 
         match socket.connect(self.iface.context(), endpoint, local_port) {
@@ -316,6 +315,15 @@ impl<'a> Connections<'a> {
             queue_proxy_error(flow, self.protocol, error);
         }
     }
+}
+
+fn new_tcp_socket() -> tcp::Socket<'static> {
+    let rx = tcp::SocketBuffer::new(vec![0; TCP_BUFFER_SIZE]);
+    let tx = tcp::SocketBuffer::new(vec![0; TCP_BUFFER_SIZE]);
+    let mut socket = tcp::Socket::new(rx, tx);
+    socket.set_keep_alive(Some(TCP_KEEP_ALIVE_INTERVAL));
+    socket.set_timeout(Some(TCP_UNRESPONSIVE_TIMEOUT));
+    socket
 }
 
 enum HostTarget {
@@ -448,5 +456,12 @@ mod tests {
         assert_eq!(packet[0] >> 4, 4);
         assert_eq!(packet[9], 6);
         assert_ne!(packet[20 + 13] & 0x02, 0);
+    }
+
+    #[test]
+    fn configures_keep_alive_for_long_lived_connections() {
+        let socket = new_tcp_socket();
+        assert_eq!(socket.keep_alive(), Some(TCP_KEEP_ALIVE_INTERVAL));
+        assert_eq!(socket.timeout(), Some(TCP_UNRESPONSIVE_TIMEOUT));
     }
 }
