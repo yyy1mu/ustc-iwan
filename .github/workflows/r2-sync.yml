@@ -1,0 +1,65 @@
+name: Sync releases to R2
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+      require_current_matrix:
+        type: boolean
+        default: true
+    secrets:
+      R2_ACCESS_KEY_ID:
+        required: true
+      R2_SECRET_ACCESS_KEY:
+        required: true
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag, or all to backfill all published releases'
+        required: true
+        default: all
+        type: string
+      require_current_matrix:
+        description: 'Require all 29 current platform archives (disable for historical releases)'
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install R2 upload dependency
+        run: python -m pip install -r workers/downloads/scripts/requirements.txt
+      - name: Synchronize published release files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          R2_BUCKET_NAME: ${{ vars.R2_BUCKET_NAME || 'ustc-iwan-downloads' }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          REQUIRE_CURRENT_MATRIX: ${{ inputs.require_current_matrix }}
+        run: |
+          for name in CLOUDFLARE_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Missing configuration: $name"
+              exit 1
+            fi
+          done
+          args=(--tag "$RELEASE_TAG")
+          if [[ "$RELEASE_TAG" == all ]]; then
+            args=(--all)
+          fi
+          if [[ "$REQUIRE_CURRENT_MATRIX" == true ]]; then
+            args+=(--require-current-matrix)
+          fi
+          python workers/downloads/scripts/sync_r2.py "${args[@]}"

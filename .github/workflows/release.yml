@@ -194,3 +194,13 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: gh release edit "$RELEASE_TAG" --draft=false
+
+  sync-r2:
+    needs: release
+    uses: ./.github/workflows/r2-sync.yml
+    with:
+      tag: ${{ github.ref_name }}
+      require_current_matrix: true
+    secrets:
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}

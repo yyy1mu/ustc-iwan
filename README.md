@@ -52,6 +52,8 @@ sudo ./iwan-client-oidc --connect            # TUN 隧道
 
 ## 安装
 
+项目文档可在 [iwan.novusapp.app](https://iwan.novusapp.app) 在线阅读；[下载页面](https://iwan.novusapp.app/downloads/) 提供 Cloudflare 与 GitHub 下载入口。开发、R2 配置及历史版本补传见 [Workers 子项目说明](workers/downloads/README.md)。
+
 从 [GitHub Releases](https://github.com/yyy1mu/ustc-iwan/releases) 下载对应平台的压缩包：
 
 ```text
@@ -64,7 +66,7 @@ iwan-client-oidc-windows-x86_64.exe     iwan-client-oidc-windows-aarch64.exe
 - macOS 的 Intel 机器选 `x86_64`，Apple Silicon 选 `aarch64`。
 - 手动客户端 `iwan-client` 有对应平台的产物；测试服务端 `iwan-server` 仅提供 Linux 产物。
 
-发布流程将各平台压缩包直接上传到 Release 草稿，全部构建成功后发布，不保存 Actions 中转产物。构建失败时可重跑任务，已上传的附件保留在草稿中。
+发布流程将各平台压缩包直接上传到 Release 草稿，全部构建成功后发布，再将正式附件校验并同步至 R2 托管，不保存 Actions 中转产物。R2 同步失败不影响 GitHub 下载，可单独重跑同步任务；网站仅展示完整同步的版本。
 
 从源码构建：
 

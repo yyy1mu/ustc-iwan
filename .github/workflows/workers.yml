@@ -1,0 +1,68 @@
+name: Workers website
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'workers/downloads/**'
+      - 'README.md'
+      - 'CONTRIBUTING.md'
+      - 'doc/**'
+      - '.github/workflows/workers.yml'
+  pull_request:
+    paths:
+      - 'workers/downloads/**'
+      - 'README.md'
+      - 'CONTRIBUTING.md'
+      - 'doc/**'
+      - '.github/workflows/workers.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: workers/downloads
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: workers/downloads/package-lock.json
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+      - run: npm run test:runtime
+      - run: npm run build
+
+  deploy:
+    needs: check
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: iwan-workers-production
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: workers/downloads
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: workers/downloads/package-lock.json
+      - run: npm ci
+      - name: Deploy website and download service
+        run: npm run deploy
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

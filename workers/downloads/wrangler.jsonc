@@ -1,0 +1,27 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "ustc-iwan-downloads",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-30",
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": [
+      "/api/*",
+      "/files/*",
+      "/health"
+    ]
+  },
+  "r2_buckets": [
+    {
+      "binding": "DOWNLOADS",
+      "bucket_name": "ustc-iwan-downloads"
+    }
+  ],
+  "routes": [
+    {
+      "pattern": "iwan.novusapp.app",
+      "custom_domain": true
+    }
+  ]
+}

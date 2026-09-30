@@ -6,3 +6,5 @@
 CACHEDIR.TAG
 .cargo-lock
 .rustc_info.json
+
+**/.wrangler/
