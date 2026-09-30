@@ -64,6 +64,8 @@ iwan-client-oidc-windows-x86_64.exe     iwan-client-oidc-windows-aarch64.exe
 - macOS 的 Intel 机器选 `x86_64`，Apple Silicon 选 `aarch64`。
 - 手动客户端 `iwan-client` 有对应平台的产物；测试服务端 `iwan-server` 仅提供 Linux 产物。
 
+发布流程将各平台压缩包直接上传到 Release 草稿，全部构建成功后发布，不保存 Actions 中转产物。构建失败时可重跑任务，已上传的附件保留在草稿中。
+
 从源码构建：
 
 ```bash

@@ -8,7 +8,21 @@ permissions:
   contents: write
 
 jobs:
+  prepare-release:
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - name: Prepare Release draft
+        run: |
+          if ! gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --draft --verify-tag --generate-notes
+          fi
+
   build:
+    needs: prepare-release
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -71,13 +85,19 @@ jobs:
           dest="$GITHUB_WORKSPACE/release/${{ matrix.binary }}-${{ matrix.suffix }}"
           cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "$dest"
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ matrix.binary }}-${{ matrix.suffix }}
-          path: release/${{ matrix.binary }}-${{ matrix.suffix }}
+      - name: Upload Release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          ASSET_NAME: ${{ matrix.binary }}-${{ matrix.suffix }}
+        run: |
+          cd release
+          zip "$ASSET_NAME.zip" "$ASSET_NAME"
+          gh release upload "$RELEASE_TAG" "$ASSET_NAME.zip" --clobber
 
   build-desktop:
+    needs: prepare-release
     name: Build ${{ matrix.binary }} for ${{ matrix.platform }}-${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -139,43 +159,38 @@ jobs:
             throw "Windows C runtime was linked dynamically"
           }
 
-      - name: Upload desktop artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ matrix.binary }}-${{ matrix.platform }}-${{ matrix.arch }}
-          path: release/${{ matrix.binary }}-${{ matrix.platform }}-${{ matrix.arch }}${{ matrix.extension }}
+      - name: Package macOS Release asset
+        if: matrix.platform == 'macos'
+        env:
+          ASSET_NAME: ${{ matrix.binary }}-${{ matrix.platform }}-${{ matrix.arch }}
+        run: |
+          cd release
+          zip "$ASSET_NAME.zip" "$ASSET_NAME"
+
+      - name: Package Windows Release asset
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        env:
+          ASSET_NAME: ${{ matrix.binary }}-${{ matrix.platform }}-${{ matrix.arch }}
+        run: Compress-Archive -Path "release/$env:ASSET_NAME.exe" -DestinationPath "release/$env:ASSET_NAME.zip"
+
+      - name: Upload Release asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          ASSET_NAME: ${{ matrix.binary }}-${{ matrix.platform }}-${{ matrix.arch }}
+        run: gh release upload "$RELEASE_TAG" "release/$ASSET_NAME.zip" --clobber
 
   release:
     needs: [build, build-desktop]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v8
-        with:
-          path: release
-
-      - name: Zip each binary individually
-        run: |
-          cd release
-          for dir in */; do
-            name="${dir%/}"
-            file=$(find "$dir" -type f | head -1)
-            zip -j "${name}.zip" "$file"
-          done
-          find . -maxdepth 1 -type d ! -name . -exec rm -rf {} +
-          ls -la
-
-      - name: Delete existing release (if any)
-        run: gh release delete "${{ github.ref_name }}" --yes 2>/dev/null || true
+      - name: Publish Release
         env:
           GH_TOKEN: ${{ github.token }}
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: ${{ github.ref_name }}
-          files: release/*.zip
-          generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release edit "$RELEASE_TAG" --draft=false
