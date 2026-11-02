@@ -83,7 +83,7 @@ impl TunnelRx {
         let pad = if sr.mode == 0 {
             0
         } else {
-            if cipher.is_empty() || cipher.len() % 16 != 0 {
+            if cipher.is_empty() || !cipher.len().is_multiple_of(16) {
                 return Ok(());
             }
             sr.decrypt(&mut cipher)
@@ -264,7 +264,7 @@ pub fn encode_uplink_sr(
 /// the inner packet is a plain ECHO_REQUEST whose 40-byte payload is echoed by
 /// the endpoint. The Android client uses this for per-link latency telemetry.
 pub fn encode_sr_echo(sr: &SrConfig, sid: u16, token: u32, payload: &[u8]) -> Vec<u8> {
-    let linkcnt = sr.links.len().min(6).max(1);
+    let linkcnt = sr.links.len().clamp(1, 6);
     let mut out = Vec::with_capacity(4 + 4 * linkcnt + 8 + payload.len());
     out.push(protocol::PT_SEGRT);
     out.push((linkcnt - 1) as u8);
@@ -338,7 +338,7 @@ fn trim_ip(packet: &mut Vec<u8>) {
     }
 }
 
-fn assemble_fragments(parts: &mut Vec<(u16, Vec<u8>)>) -> Option<Vec<u8>> {
+fn assemble_fragments(parts: &mut [(u16, Vec<u8>)]) -> Option<Vec<u8>> {
     if parts.len() < 2 {
         return None;
     }

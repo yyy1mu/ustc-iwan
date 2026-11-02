@@ -57,9 +57,9 @@ pub fn parse_ack(buf: &[u8], expect_nonce: u32) -> Result<AuthResult> {
 
     if t == protocol::PT_OPEN_REJECT {
         let mut message = String::from_utf8_lossy(&buf[24..]).to_string();
-        for (typ, value) in protocol::parse_tlvs(&buf[24..]) {
-            if typ == protocol::T_ERR_MSG {
-                message = String::from_utf8_lossy(&value).to_string();
+        for tlv in protocol::parse_tlvs(&buf[24..]) {
+            if tlv.typ == protocol::TlvType::ErrMsg {
+                message = String::from_utf8_lossy(&tlv.value).to_string();
             }
         }
         let (code, reason) = auth_error(&message);
@@ -87,20 +87,21 @@ pub fn parse_ack(buf: &[u8], expect_nonce: u32) -> Result<AuthResult> {
     let mut gw6 = None;
     let mut duppkt = None;
     let mut auth_verify = None;
-    for (tt, v) in protocol::parse_tlvs(&buf[24..]) {
-        match tt {
-            protocol::T_IP if v.len() >= 4 => tun = protocol::ip_to_string(&v),
-            protocol::T_GATEWAY if v.len() >= 4 => gw = protocol::ip_to_string(&v),
-            protocol::T_DNS if v.len() >= 4 => {
-                dns = protocol::ip_to_string(&v);
+    for tlv in protocol::parse_tlvs(&buf[24..]) {
+        let v = &tlv.value;
+        match tlv.typ {
+            protocol::TlvType::Ip if v.len() >= 4 => tun = protocol::ip_to_string(v),
+            protocol::TlvType::Gateway if v.len() >= 4 => gw = protocol::ip_to_string(v),
+            protocol::TlvType::Dns if v.len() >= 4 => {
+                dns = protocol::ip_to_string(v);
                 if v.len() >= 8 {
                     dns2 = Some(protocol::ip_to_string(&v[4..]));
                 }
             }
-            protocol::T_MTU if v.len() >= 2 => mtu = u16::from_be_bytes([v[0], v[1]]),
-            protocol::T_ENCRYPT if !v.is_empty() => enc = Some(v[0]),
-            protocol::T_DUPPKT if !v.is_empty() => duppkt = Some(v[0]),
-            protocol::T_AUTH_VERIFY => {
+            protocol::TlvType::Mtu if v.len() >= 2 => mtu = u16::from_be_bytes([v[0], v[1]]),
+            protocol::TlvType::Encrypt if !v.is_empty() => enc = Some(v[0]),
+            protocol::TlvType::DupPkt if !v.is_empty() => duppkt = Some(v[0]),
+            protocol::TlvType::AuthVerify => {
                 if v.len() != 4 {
                     anyhow::bail!("AUTH_VERIFY wrong length {}", v.len());
                 }
@@ -112,17 +113,17 @@ pub fn parse_ack(buf: &[u8], expect_nonce: u32) -> Result<AuthResult> {
                 }
                 auth_verify = Some(echo);
             }
-            protocol::T_IPV6 if v.len() >= 16 => {
+            protocol::TlvType::Ip6 if v.len() >= 16 => {
                 let mut a = [0u8; 16];
                 a.copy_from_slice(&v[..16]);
                 ipv6 = Some(Ipv6Addr::from(a));
             }
-            protocol::T_DNS6 if v.len() >= 16 => {
+            protocol::TlvType::Dns6 if v.len() >= 16 => {
                 let mut a = [0u8; 16];
                 a.copy_from_slice(&v[..16]);
                 dns6 = Some(Ipv6Addr::from(a));
             }
-            protocol::T_GATEWAY6 if v.len() >= 16 => {
+            protocol::TlvType::Gateway6 if v.len() >= 16 => {
                 let mut a = [0u8; 16];
                 a.copy_from_slice(&v[..16]);
                 gw6 = Some(Ipv6Addr::from(a));

@@ -92,6 +92,7 @@ pub(crate) fn send_vpn_keepalive(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn send_vpn(
     sock: &UdpSocket,
     device: &mut IpTunnelDevice,

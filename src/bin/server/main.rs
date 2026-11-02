@@ -1,6 +1,13 @@
 mod cli;
 #[cfg(target_os = "linux")]
+#[cfg(target_os = "linux")]
+mod downlink;
+#[cfg(target_os = "linux")]
+mod fragment;
+#[cfg(target_os = "linux")]
 mod handler;
+#[cfg(target_os = "linux")]
+mod nat;
 #[cfg(target_os = "linux")]
 mod session;
 
@@ -14,13 +21,12 @@ use std::collections::HashMap;
 #[cfg(target_os = "linux")]
 use std::net::{Ipv4Addr, UdpSocket};
 #[cfg(target_os = "linux")]
-use std::process::Command;
 #[cfg(target_os = "linux")]
-use std::sync::atomic::AtomicU32;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 #[cfg(target_os = "linux")]
 use std::sync::{Arc, Mutex};
 #[cfg(target_os = "linux")]
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[cfg(target_os = "linux")]
 fn main() -> Result<()> {
@@ -35,13 +41,13 @@ fn main() -> Result<()> {
 
     let _ = std::fs::write("/proc/sys/net/ipv4/ip_forward", "1");
     println!("ip_forward=1");
-    setup_nat(&cli.subnet, &cli.nat_if);
 
     let _ = iwan::core::util::ip_run_quiet(&["link", "del", &cli.tun]);
     let tun_fd = tun::open_tun(&cli.tun).context("open tun")?;
     tun::set_nonblock(tun_fd);
     println!("tun {} fd={}", cli.tun, tun_fd);
     configure_tun(&cli, prefix);
+    let nat_added = nat::setup(&cli.subnet, &cli.nat_if);
 
     let next_ip = AtomicU32::new(u32::from(subnet_ip) + 2);
     let next_ipv6 = AtomicU32::new(1);
@@ -92,13 +98,19 @@ fn main() -> Result<()> {
     let mut udp_buf = vec![0u8; 65535];
     let mut tun_buf = vec![0u8; 65535];
 
+    let running = Arc::new(AtomicBool::new(true));
+    let shutdown = running.clone();
     ctrlc::set_handler(move || {
         println!("\nexiting...");
-        std::process::exit(0);
+        shutdown.store(false, Ordering::Relaxed);
     })
     .ok();
 
+    let mut last_reap = Instant::now();
     loop {
+        if !running.load(Ordering::Relaxed) {
+            break;
+        }
         match sock.recv_from(&mut udp_buf) {
             Ok((n, addr)) => handler::handle_udp(&udp_buf[..n], addr, &ctx),
             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
@@ -107,6 +119,11 @@ fn main() -> Result<()> {
                 break;
             }
         }
+        if last_reap.elapsed() >= Duration::from_secs(1) {
+            handler::reap_sessions(&sessions, Duration::from_secs(120));
+            fragment::reap_fragments(&fragments, Duration::from_secs(30));
+            last_reap = Instant::now();
+        }
         // Drain the TUN queue. Reading only one packet per loop makes queued
         // downlink wait for the next 100 ms UDP timeout, which caps downlink
         // at ~10 packets/s and causes multi-second TCP stalls under load.
@@ -114,7 +131,7 @@ fn main() -> Result<()> {
         loop {
             let r = tun::tun_read(tun_fd, &mut tun_buf);
             if r > 0 {
-                handler::handle_tun_downlink(&mut tun_buf[..r as usize], &ctx);
+                downlink::handle(&mut tun_buf[..r as usize], &ctx);
                 drained += 1;
                 if drained >= 256 {
                     break;
@@ -130,6 +147,11 @@ fn main() -> Result<()> {
             }
         }
     }
+    let _ = iwan::core::util::ip_run_quiet(&["link", "del", &cli.tun]);
+    if nat_added {
+        nat::remove(&cli.subnet, &cli.nat_if);
+    }
+    println!("server stopped.");
     Ok(())
 }
 
@@ -169,43 +191,6 @@ fn load_users(path: &str) -> Result<HashMap<String, String>> {
     }
     println!("loaded {} users", users.len());
     Ok(users)
-}
-
-#[cfg(target_os = "linux")]
-fn setup_nat(subnet: &str, nat_if: &str) {
-    let _ = Command::new("iptables")
-        .args([
-            "-t",
-            "nat",
-            "-C",
-            "POSTROUTING",
-            "-s",
-            subnet,
-            "-o",
-            nat_if,
-            "-j",
-            "MASQUERADE",
-        ])
-        .status();
-    let ok = Command::new("iptables")
-        .args([
-            "-t",
-            "nat",
-            "-A",
-            "POSTROUTING",
-            "-s",
-            subnet,
-            "-o",
-            nat_if,
-            "-j",
-            "MASQUERADE",
-        ])
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false);
-    if ok {
-        println!("iptables: MASQUERADE {subnet} -> {nat_if}");
-    }
 }
 
 #[cfg(target_os = "linux")]

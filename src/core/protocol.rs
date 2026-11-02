@@ -1,5 +1,50 @@
 use super::crypto;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum PacketType {
+    OpenReject = 0x11,
+    OpenAck = 0x12,
+    Open = 0x13,
+    Data = 0x14,
+    EchoRequest = 0x15,
+    EchoResponse = 0x16,
+    Close = 0x17,
+    DataEncrypted = 0x18,
+    DataDup = 0x19,
+    DataEncDup = 0x20,
+    IpFragment = 0x22,
+    DataIpv6 = 0x23,
+    IpFragmentIpv6 = 0x24,
+    SegmentRouting = 0x28,
+    PingRequest = 0x29,
+    PingResponse = 0x2A,
+}
+
+impl PacketType {
+    pub fn from_u8(value: u8) -> Option<Self> {
+        Some(match value {
+            0x11 => Self::OpenReject,
+            0x12 => Self::OpenAck,
+            0x13 => Self::Open,
+            0x14 => Self::Data,
+            0x15 => Self::EchoRequest,
+            0x16 => Self::EchoResponse,
+            0x17 => Self::Close,
+            0x18 => Self::DataEncrypted,
+            0x19 => Self::DataDup,
+            0x20 => Self::DataEncDup,
+            0x22 => Self::IpFragment,
+            0x23 => Self::DataIpv6,
+            0x24 => Self::IpFragmentIpv6,
+            0x28 => Self::SegmentRouting,
+            0x29 => Self::PingRequest,
+            0x2A => Self::PingResponse,
+            _ => return None,
+        })
+    }
+}
+
 pub const PT_OPEN_REJECT: u8 = 0x11;
 pub const PT_OPEN_ACK: u8 = 0x12;
 pub const PT_OPEN: u8 = 0x13;
@@ -31,6 +76,59 @@ pub const T_DNS6: u8 = 0x0C;
 pub const T_GATEWAY6: u8 = 0x0D;
 pub const T_AUTH_VERIFY: u8 = 0x0F;
 pub const T_ERR_MSG: u8 = 0x10;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum TlvType {
+    Username = 0x01,
+    Password = 0x02,
+    Mtu = 0x03,
+    Ip = 0x04,
+    Dns = 0x05,
+    Gateway = 0x06,
+    Netmask = 0x07,
+    Encrypt = 0x08,
+    DupPkt = 0x09,
+    Link = 0x0A,
+    Ip6 = 0x0B,
+    Dns6 = 0x0C,
+    Gateway6 = 0x0D,
+    AuthVerify = 0x0F,
+    ErrMsg = 0x10,
+}
+
+impl TlvType {
+    pub fn from_u8(value: u8) -> Option<Self> {
+        Some(match value {
+            0x01 => Self::Username,
+            0x02 => Self::Password,
+            0x03 => Self::Mtu,
+            0x04 => Self::Ip,
+            0x05 => Self::Dns,
+            0x06 => Self::Gateway,
+            0x07 => Self::Netmask,
+            0x08 => Self::Encrypt,
+            0x09 => Self::DupPkt,
+            0x0A => Self::Link,
+            0x0B => Self::Ip6,
+            0x0C => Self::Dns6,
+            0x0D => Self::Gateway6,
+            0x0F => Self::AuthVerify,
+            0x10 => Self::ErrMsg,
+            _ => return None,
+        })
+    }
+
+    pub const fn as_u8(self) -> u8 {
+        self as u8
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Tlv {
+    pub typ: TlvType,
+    pub value: Vec<u8>,
+}
 
 pub fn pkhdr(typ: u8, enc: u8, sid: u16, tok: u32) -> [u8; 8] {
     let mut h = [0u8; 8];
@@ -64,17 +162,21 @@ pub fn tlv(typ: u8, val: &[u8]) -> Vec<u8> {
     v
 }
 
-pub fn parse_tlvs(data: &[u8]) -> Vec<(u8, Vec<u8>)> {
+pub fn parse_tlvs(data: &[u8]) -> Vec<Tlv> {
     let mut out = Vec::new();
     let mut i = 0;
     while i + 2 <= data.len() {
-        let t = data[i];
-        let l = data[i + 1] as usize;
-        if l < 2 || i + l > data.len() {
+        let len = data[i + 1] as usize;
+        if len < 2 || i + len > data.len() {
             break;
         }
-        out.push((t, data[i + 2..i + l].to_vec()));
-        i += l;
+        if let Some(typ) = TlvType::from_u8(data[i]) {
+            out.push(Tlv {
+                typ,
+                value: data[i + 2..i + len].to_vec(),
+            });
+        }
+        i += len;
     }
     out
 }

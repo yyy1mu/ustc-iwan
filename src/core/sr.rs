@@ -103,7 +103,7 @@ impl SrConfig {
     }
 
     pub fn encrypt(&self, data: &mut [u8]) -> Result<(), String> {
-        if data.len() % 16 != 0 {
+        if !data.len().is_multiple_of(16) {
             return Err("SR payload is not 16-byte aligned".into());
         }
         let key = self.key();
@@ -126,7 +126,7 @@ impl SrConfig {
     }
 
     pub fn decrypt(&self, data: &mut [u8]) -> Result<(), String> {
-        if data.len() % 16 != 0 {
+        if !data.len().is_multiple_of(16) {
             return Err("SR payload is not 16-byte aligned".into());
         }
         let key = self.key();

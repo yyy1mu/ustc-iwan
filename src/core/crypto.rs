@@ -63,7 +63,7 @@ pub fn xor(data: &mut [u8], key: &[u8]) {
 }
 
 pub fn aes_ecb_encrypt(data: &mut [u8], key: &[u8]) -> Result<(), String> {
-    if data.len() % 16 != 0 {
+    if !data.len().is_multiple_of(16) {
         return Err("AES input is not 16-byte aligned".into());
     }
     match key.len() {
@@ -89,7 +89,7 @@ pub fn aes_ecb_encrypt(data: &mut [u8], key: &[u8]) -> Result<(), String> {
 }
 
 pub fn aes_ecb_decrypt(data: &mut [u8], key: &[u8]) -> Result<(), String> {
-    if data.len() % 16 != 0 {
+    if !data.len().is_multiple_of(16) {
         return Err("AES input is not 16-byte aligned".into());
     }
     match key.len() {

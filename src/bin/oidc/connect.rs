@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use iwan::core::{auth, crypto, gcm};
+use iwan::core::{auth, client, crypto, gcm};
 #[cfg(target_os = "linux")]
 use iwan::core::{tun, tun_proxy};
 use std::io::{self, Write};
@@ -91,7 +91,7 @@ fn select_fastest_server<'a>(servers: &'a [Server], bind: Option<&str>) -> Resul
         match auth::ping_server(&srv.host, srv.port, 800, bind) {
             Ok(rtt) => {
                 eprintln!("  ping {}:{}  {rtt:?}", srv.host, srv.port);
-                if best.map_or(true, |(_, current)| rtt < current) {
+                if best.is_none_or(|(_, current)| rtt < current) {
                     best = Some((srv, rtt));
                 }
             }
@@ -167,7 +167,6 @@ pub(crate) fn connect_server(cli: &cli::Cli, config: &LocalConfig) -> Result<()>
     } else {
         cli.salt.as_str()
     };
-    let ct = auth::get_ct(&srv.username, &password, None, salt)?;
     #[cfg(target_os = "linux")]
     let open_mtu = srv.mtu.unwrap_or(cli.tun_mtu);
     #[cfg(not(target_os = "linux"))]
@@ -178,55 +177,6 @@ pub(crate) fn connect_server(cli: &cli::Cli, config: &LocalConfig) -> Result<()>
         .first()
         .copied()
         .or_else(|| (cli.sr_encrypt_mode != 0).then_some(1));
-    let nonce = auth::rand_u32();
-    let open = auth::build_open(
-        &srv.username,
-        &ct,
-        open_mtu,
-        cli.encrypt,
-        pipe,
-        srlink,
-        nonce,
-    );
-    let sock = auth::udp_connect(&srv.host, srv.port, 3000, cli.bind.as_deref())?;
-
-    let auth_result = {
-        let mut result = None;
-        for i in 0u32..=3 {
-            sock.send(&open)?;
-            if iwan::core::util::debug_enabled() {
-                eprintln!("  auth attempt {}", i + 1);
-            }
-            let mut buf = [0u8; 4096];
-            match sock.recv(&mut buf) {
-                Ok(m) => match auth::parse_ack(&buf[..m], nonce) {
-                    Ok(aa) => {
-                        result = Some(aa);
-                        break;
-                    }
-                    Err(e) => eprintln!("  [{i}] err: {e}"),
-                },
-                Err(e) => eprintln!("  [{i}] timeout: {e}"),
-            }
-            std::thread::sleep(std::time::Duration::from_millis(1000));
-        }
-        result.context("auth failed")?
-    };
-
-    let enc = auth_result.enc.unwrap_or(cli.encrypt);
-    eprintln!(
-        "  OK  tun={} gw={} dns={} mtu={} enc={} ipv6={:?} av={:?}",
-        auth_result.tun,
-        auth_result.gw,
-        auth_result.dns,
-        auth_result.mtu,
-        enc,
-        auth_result.ipv6,
-        auth_result.auth_verify
-    );
-
-    let sk = crypto::session_key(&srv.username, &password);
-    let xk: Vec<u8> = sk[..8].to_vec();
     let sr_key_mode =
         iwan::core::sr::SrKeyMode::parse(&cli.sr_key_mode).context("invalid --sr-key-mode")?;
     let sr = iwan::core::sr::SrConfig::from_options(
@@ -237,8 +187,34 @@ pub(crate) fn connect_server(cli: &cli::Cli, config: &LocalConfig) -> Result<()>
     )
     .map(|sr| sr.with_local_id(cli.sr_local_id));
 
+    let session = client::open(&client::SessionConfig {
+        server: &srv.host,
+        port: srv.port,
+        user: &srv.username,
+        pass: &password,
+        ct_pass: None,
+        salt,
+        mtu: open_mtu,
+        encrypt: cli.encrypt,
+        bind: cli.bind.as_deref(),
+        pipe,
+        srlink,
+        sr,
+    })?;
+
+    eprintln!(
+        "  OK  tun={} gw={} dns={} mtu={} enc={} ipv6={:?} av={:?}",
+        session.auth.tun,
+        session.auth.gw,
+        session.auth.dns,
+        session.auth.mtu,
+        session.encryption,
+        session.auth.ipv6,
+        session.auth.auth_verify
+    );
+
     if cli.socks || cli.http {
-        return run_local_proxy(cli, &sock, &xk, &sk, enc, sr, &auth_result, dns);
+        return run_local_proxy(cli, session, dns);
     }
 
     #[cfg(target_os = "linux")]
@@ -251,23 +227,22 @@ pub(crate) fn connect_server(cli: &cli::Cli, config: &LocalConfig) -> Result<()>
         }
 
         let route_targets = route_targets(cli);
-
         let outcome = tun_proxy::run_pump(tun_proxy::PumpConfig {
             tun_fd,
             tun_name: &cli.tun,
-            sock: &sock,
-            xor_key: &xk,
-            aes_key: &sk,
-            sid: auth_result.sid,
-            token: auth_result.tok,
-            encryption: enc,
+            sock: &session.sock,
+            xor_key: &session.xor_key,
+            aes_key: &session.aes_key,
+            sid: session.auth.sid,
+            token: session.auth.tok,
+            encryption: session.encryption,
             server: &srv.host,
             route_targets: &route_targets,
-            tun_ip: &auth_result.tun,
-            tun_ipv6: auth_result.ipv6,
-            mtu: auth_result.mtu,
-            sr,
-            duplicate: cli.duplicate || auth_result.duppkt.unwrap_or(0) != 0,
+            tun_ip: &session.auth.tun,
+            tun_ipv6: session.auth.ipv6,
+            mtu: session.auth.mtu,
+            sr: session.sr,
+            duplicate: cli.duplicate || session.auth.duppkt.unwrap_or(0) != 0,
         })?;
 
         tun::tun_close(tun_fd);
@@ -294,19 +269,16 @@ fn route_targets(cli: &cli::Cli) -> Vec<String> {
 
 fn run_local_proxy(
     cli: &cli::Cli,
-    sock: &std::net::UdpSocket,
-    xor_key: &[u8],
-    aes_key: &[u8],
-    encryption: u8,
-    sr: Option<iwan::core::sr::SrConfig>,
-    auth_result: &auth::AuthResult,
+    session: client::ClientSession,
     dns: iwan::core::dns::DnsResolver,
 ) -> Result<()> {
-    let inner_ip = auth_result
+    let inner_ip = session
+        .auth
         .tun
         .parse()
         .context("server returned invalid tunnel IPv4 address")?;
-    let gateway = auth_result
+    let gateway = session
+        .auth
         .gw
         .parse()
         .context("server returned invalid gateway IPv4 address")?;
@@ -322,20 +294,20 @@ fn run_local_proxy(
         )
     };
     iwan::core::local_proxy::run(
-        sock,
+        &session.sock,
         iwan::core::local_proxy::ProxyConfig {
             listen,
             protocol,
             inner_ip,
             gateway,
-            mtu: usize::from(auth_result.mtu.min(cli.proxy_mtu)),
-            xor_key,
-            aes_key,
-            sid: auth_result.sid,
-            token: auth_result.tok,
-            encryption,
-            sr,
-            duplicate: cli.duplicate || auth_result.duppkt.unwrap_or(0) != 0,
+            mtu: usize::from(session.auth.mtu.min(cli.proxy_mtu)),
+            xor_key: &session.xor_key,
+            aes_key: &session.aes_key,
+            sid: session.auth.sid,
+            token: session.auth.tok,
+            encryption: session.encryption,
+            sr: session.sr,
+            duplicate: cli.duplicate || session.auth.duppkt.unwrap_or(0) != 0,
             dns,
         },
     )

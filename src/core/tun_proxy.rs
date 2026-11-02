@@ -96,6 +96,11 @@ impl UploadBatch {
 
     fn queue_packet(&mut self, packet: &[u8]) {
         if packet.len() > SLOT {
+            eprintln!(
+                "[TUN→UDP] drop oversized packet: {} > {} bytes",
+                packet.len(),
+                SLOT
+            );
             return;
         }
         let base = self.count * SLOT;

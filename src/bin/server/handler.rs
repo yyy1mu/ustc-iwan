@@ -1,3 +1,4 @@
+use crate::fragment::SrFragment;
 use crate::session::Session;
 use iwan::core::sr::SrConfig;
 use iwan::core::{crypto, protocol, tun};
@@ -9,12 +10,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 pub type SessionMap = Arc<Mutex<HashMap<u16, Session>>>;
-
-pub struct SrFragment {
-    parts: Vec<(u16, Vec<u8>)>,
-    eop: Option<usize>,
-    created: Instant,
-}
 
 pub struct ServerContext<'a> {
     pub users: &'a HashMap<String, String>,
@@ -39,64 +34,65 @@ pub fn handle_udp(raw: &[u8], addr: SocketAddr, ctx: &ServerContext<'_>) {
     if raw.len() < 8 {
         return;
     }
-    let typ = raw[0];
+    let raw_type = raw[0];
+    let Some(typ) = protocol::PacketType::from_u8(raw_type) else {
+        return;
+    };
     let sid = u16::from_be_bytes([raw[2], raw[3]]);
     let token = u32::from_be_bytes([raw[4], raw[5], raw[6], raw[7]]);
 
-    if typ == protocol::PT_SEGRT {
+    if typ == protocol::PacketType::SegmentRouting {
         handle_sr_echo(raw, addr, ctx);
         return;
     }
 
     match typ {
-        protocol::PT_OPEN => handle_open(raw, addr, ctx),
-        protocol::PT_DATA
-        | protocol::PT_DATA_ENC
-        | protocol::PT_DATA_IPV6
-        | protocol::PT_DATA_DUP
-        | protocol::PT_DATA_ENC_DUP => {
+        protocol::PacketType::Open => handle_open(raw, addr, ctx),
+        protocol::PacketType::Data
+        | protocol::PacketType::DataEncrypted
+        | protocol::PacketType::DataIpv6
+        | protocol::PacketType::DataDup
+        | protocol::PacketType::DataEncDup => {
             let session = {
-                let sessions = ctx.sessions.lock().unwrap();
-                sessions.get(&sid).and_then(|session| {
-                    (session.token == token).then(|| {
-                        (
-                            session.xor_key.clone(),
-                            session.aes_key.clone(),
-                            session.enc,
-                        )
-                    })
-                })
+                let mut sessions = ctx.sessions.lock().unwrap();
+                let Some(session) = sessions.get_mut(&sid) else {
+                    return;
+                };
+                if session.token != token {
+                    return;
+                }
+                session.last_seen = Instant::now();
+                (
+                    session.xor_key.clone(),
+                    session.aes_key.clone(),
+                    session.enc,
+                )
             };
-            let Some((xor_key, aes_key, enc)) = session else {
-                return;
-            };
+            let (xor_key, aes_key, enc) = session;
             let mut payload = raw[8..].to_vec();
-            if typ == protocol::PT_DATA_ENC || typ == protocol::PT_DATA_ENC_DUP {
+            if raw_type == protocol::PT_DATA_ENC || raw_type == protocol::PT_DATA_ENC_DUP {
                 match enc {
                     1 => crypto::xor(&mut payload, &xor_key),
-                    2 => {
-                        if crypto::aes_ecb_decrypt(&mut payload, &aes_key).is_err() {
-                            return;
-                        }
-                    }
+                    2 if crypto::aes_ecb_decrypt(&mut payload, &aes_key).is_err() => return,
+                    2 => {}
                     _ => {}
                 }
             }
-            trim_ip(&mut payload);
+            crate::downlink::trim_ip(&mut payload);
             if !payload.is_empty() {
                 tun::tun_write(ctx.tun, &payload);
             }
             if iwan::core::util::debug_enabled() {
                 eprintln!(
-                    "[UDP→TUN] type=0x{typ:02x} sid={sid:#06x} enc={enc} len={}",
+                    "[UDP→TUN] type=0x{raw_type:02x} sid={sid:#06x} enc={enc} len={}",
                     payload.len()
                 );
             }
         }
-        protocol::PT_IPFRAG | protocol::PT_IPFRAG_ALT => {
-            handle_fragment(raw, sid, token, ctx);
+        protocol::PacketType::IpFragment | protocol::PacketType::IpFragmentIpv6 => {
+            crate::fragment::handle_fragment(raw, sid, token, ctx);
         }
-        protocol::PT_CLOSE => {
+        protocol::PacketType::Close => {
             let mut sessions = ctx.sessions.lock().unwrap();
             if let Some(session) = sessions.get(&sid) {
                 if session.token != token {
@@ -107,10 +103,11 @@ pub fn handle_udp(raw: &[u8], addr: SocketAddr, ctx: &ServerContext<'_>) {
                 println!("[{addr:?}] session {sid:#06x} (ip {}) closed", session.ip);
             }
         }
-        protocol::PT_ECHO_REQ if protocol::verify_sig(raw) => {
+        protocol::PacketType::EchoRequest if protocol::verify_sig(raw) => {
+            touch_session(ctx, sid, token);
             send_echo_response(ctx.sock, addr, raw)
         }
-        protocol::PT_PING_REQ if protocol::verify_sig(raw) => {
+        protocol::PacketType::PingRequest if protocol::verify_sig(raw) => {
             let header = protocol::pkhdr(protocol::PT_PING_RSP, 0, 0xFFFF, 0xFFFF_FFFF);
             ctx.sock
                 .send_to(&protocol::ctrl_pkt(&header, &[]), addr)
@@ -134,22 +131,27 @@ fn handle_open(raw: &[u8], addr: SocketAddr, ctx: &ServerContext<'_>) {
     let mut auth_verify: Option<u32> = None;
     let mut client_ipv6: Option<Ipv6Addr> = None;
 
-    for (typ, value) in protocol::parse_tlvs(&raw[24..]) {
-        match typ {
-            protocol::T_USERNAME => user = String::from_utf8_lossy(&value).to_string(),
-            protocol::T_PASSWORD if value.len() >= 16 => ct_pass.copy_from_slice(&value[..16]),
-            protocol::T_MTU if value.len() >= 2 => mtu = u16::from_be_bytes([value[0], value[1]]),
-            protocol::T_ENCRYPT if !value.is_empty() => enc = value[0],
-            protocol::T_PIPE if value.len() == 2 => {
+    for tlv in protocol::parse_tlvs(&raw[24..]) {
+        let value = &tlv.value;
+        match tlv.typ {
+            protocol::TlvType::Username => user = String::from_utf8_lossy(value).to_string(),
+            protocol::TlvType::Password if value.len() >= 16 => {
+                ct_pass.copy_from_slice(&value[..16])
+            }
+            protocol::TlvType::Mtu if value.len() >= 2 => {
+                mtu = u16::from_be_bytes([value[0], value[1]])
+            }
+            protocol::TlvType::Encrypt if !value.is_empty() => enc = value[0],
+            protocol::TlvType::Link if value.len() == 2 => {
                 pipe_raw = Some(u16::from_be_bytes([value[0], value[1]]));
             }
-            protocol::T_PIPE if value.len() >= 4 => {
+            protocol::TlvType::Link if value.len() >= 4 => {
                 srlink = Some(u32::from_be_bytes([value[0], value[1], value[2], value[3]]));
             }
-            protocol::T_AUTH_VERIFY if value.len() >= 4 => {
+            protocol::TlvType::AuthVerify if value.len() >= 4 => {
                 auth_verify = Some(u32::from_be_bytes([value[0], value[1], value[2], value[3]]));
             }
-            protocol::T_IPV6 if value.len() >= 16 => {
+            protocol::TlvType::Ip6 if value.len() >= 16 => {
                 let mut a = [0u8; 16];
                 a.copy_from_slice(&value[..16]);
                 client_ipv6 = Some(Ipv6Addr::from(a));
@@ -236,7 +238,7 @@ fn handle_open(raw: &[u8], addr: SocketAddr, ctx: &ServerContext<'_>) {
             pipeid,
             pipeidx,
             srlink,
-            created: Instant::now(),
+            last_seen: Instant::now(),
         },
     );
 }
@@ -256,13 +258,14 @@ fn handle_sr_echo(raw: &[u8], addr: SocketAddr, ctx: &ServerContext<'_>) {
     let sid = u16::from_be_bytes([inner[2], inner[3]]);
     let token = u32::from_be_bytes([inner[4], inner[5], inner[6], inner[7]]);
     {
-        let sessions = ctx.sessions.lock().unwrap();
-        let Some(session) = sessions.get(&sid) else {
+        let mut sessions = ctx.sessions.lock().unwrap();
+        let Some(session) = sessions.get_mut(&sid) else {
             return;
         };
         if session.token != token {
             return;
         }
+        session.last_seen = Instant::now();
     }
 
     if inner_type == protocol::PT_ECHO_REQ {
@@ -283,7 +286,7 @@ fn handle_sr_echo(raw: &[u8], addr: SocketAddr, ctx: &ServerContext<'_>) {
         if algo != 0 && algo == sr.mode {
             let pad = (flags >> 3) as usize;
             let mut cipher = inner[8..].to_vec();
-            if cipher.len() % 16 != 0 || cipher.len() < pad {
+            if !cipher.len().is_multiple_of(16) || cipher.len() < pad {
                 return;
             }
             if sr.decrypt(&mut cipher).is_err() {
@@ -297,7 +300,7 @@ fn handle_sr_echo(raw: &[u8], addr: SocketAddr, ctx: &ServerContext<'_>) {
 
     let typ = inner[0];
     if typ == protocol::PT_IPFRAG || typ == protocol::PT_IPFRAG_ALT {
-        handle_fragment(&inner, sid, token, ctx);
+        crate::fragment::handle_fragment(&inner, sid, token, ctx);
         return;
     }
     if typ != protocol::PT_DATA
@@ -310,24 +313,22 @@ fn handle_sr_echo(raw: &[u8], addr: SocketAddr, ctx: &ServerContext<'_>) {
     }
     let mut payload = inner[8..].to_vec();
     if typ == protocol::PT_DATA_ENC || typ == protocol::PT_DATA_ENC_DUP {
-        let sessions = ctx.sessions.lock().unwrap();
-        let Some(session) = sessions.get(&sid) else {
+        let mut sessions = ctx.sessions.lock().unwrap();
+        let Some(session) = sessions.get_mut(&sid) else {
             return;
         };
         if session.token != token {
             return;
         }
+        session.last_seen = Instant::now();
         match session.enc {
             1 => crypto::xor(&mut payload, &session.xor_key),
-            2 => {
-                if crypto::aes_ecb_decrypt(&mut payload, &session.aes_key).is_err() {
-                    return;
-                }
-            }
+            2 if crypto::aes_ecb_decrypt(&mut payload, &session.aes_key).is_err() => return,
+            2 => {}
             _ => {}
         }
     }
-    trim_ip(&mut payload);
+    crate::downlink::trim_ip(&mut payload);
     if !payload.is_empty() {
         tun::tun_write(ctx.tun, &payload);
     }
@@ -339,69 +340,22 @@ fn handle_sr_echo(raw: &[u8], addr: SocketAddr, ctx: &ServerContext<'_>) {
     }
 }
 
-fn handle_fragment(raw: &[u8], sid: u16, token: u32, ctx: &ServerContext<'_>) {
-    if raw.len() < 16 {
-        return;
-    }
-    {
-        let sessions = ctx.sessions.lock().unwrap();
-        let Some(session) = sessions.get(&sid) else {
-            return;
-        };
-        if session.token != token {
-            return;
+fn touch_session(ctx: &ServerContext<'_>, sid: u16, token: u32) {
+    let mut sessions = ctx.sessions.lock().unwrap();
+    if let Some(session) = sessions.get_mut(&sid) {
+        if session.token == token {
+            session.last_seen = Instant::now();
         }
     }
-    let id = u32::from_le_bytes([raw[8], raw[9], raw[10], raw[11]]);
-    let dword = u32::from_le_bytes([raw[12], raw[13], raw[14], raw[15]]);
-    let frag_off = (((dword >> 2) & 0x1fff) as usize) * 1;
-    let frag_len = ((dword >> 15) & 0x7ff) as usize;
-    let end = (16 + frag_len).min(raw.len());
-    if end <= 16 {
-        return;
-    }
-    let part = raw[16..end].to_vec();
-    let now = Instant::now();
-    let mut frags = ctx.fragments.lock().unwrap();
-    let entry = frags.entry((sid, id)).or_insert_with(|| SrFragment {
-        parts: Vec::new(),
-        eop: None,
-        created: now,
-    });
-    if entry.parts.iter().any(|(off, _)| *off as usize == frag_off) {
-        return;
-    }
-    if dword & 1 != 0 {
-        entry.eop = Some(frag_off + part.len());
-    }
-    entry.parts.push((frag_off as u16, part));
-    if entry.parts.len() > 16 || now.duration_since(entry.created).as_secs() > 10 {
-        frags.remove(&(sid, id));
-        return;
-    }
-    entry.parts.sort_by_key(|(off, _)| *off);
-    let mut out = Vec::new();
-    for (off, data) in entry.parts.iter() {
-        if *off as usize != out.len() {
-            return;
-        }
-        out.extend_from_slice(data);
-    }
-    if entry.eop != Some(out.len()) {
-        return;
-    }
-    if let Some(first) = out.first() {
-        let version = first >> 4;
-        let ok = match version {
-            4 => out.len() >= 20,
-            6 => out.len() >= 40,
-            _ => false,
-        };
-        if ok {
-            frags.remove(&(sid, id));
-            drop(frags);
-            tun::tun_write(ctx.tun, &out);
-        }
+}
+
+pub fn reap_sessions(sessions: &SessionMap, idle: std::time::Duration) {
+    let mut sessions = sessions.lock().unwrap();
+    let before = sessions.len();
+    sessions.retain(|_, session| session.last_seen.elapsed() < idle);
+    let removed = before.saturating_sub(sessions.len());
+    if removed > 0 {
+        println!("reaped {removed} idle session(s)");
     }
 }
 
@@ -418,302 +372,4 @@ fn send_echo_response(sock: &UdpSocket, addr: SocketAddr, raw: &[u8]) {
     let payload = raw.get(24..).unwrap_or(&[]);
     sock.send_to(&protocol::ctrl_pkt(&header, payload), addr)
         .ok();
-}
-
-pub fn handle_tun_downlink(ip_pkt: &mut [u8], ctx: &ServerContext<'_>) {
-    if ip_pkt.is_empty() {
-        return;
-    }
-    let version = ip_pkt[0] >> 4;
-    let found = {
-        let sessions = ctx.sessions.lock().unwrap();
-        match version {
-            4 if ip_pkt.len() >= 20 => {
-                let dst = Ipv4Addr::new(ip_pkt[16], ip_pkt[17], ip_pkt[18], ip_pkt[19]);
-                sessions
-                    .values()
-                    .find(|session| session.ip == dst)
-                    .map(|session| {
-                        (
-                            session.sid,
-                            session.token,
-                            session.addr,
-                            session.xor_key.clone(),
-                            session.aes_key.clone(),
-                            session.enc,
-                            session.srlink,
-                        )
-                    })
-            }
-            6 if ip_pkt.len() >= 40 => {
-                let mut a = [0u8; 16];
-                a.copy_from_slice(&ip_pkt[24..40]);
-                let dst = Ipv6Addr::from(a);
-                sessions
-                    .values()
-                    .find(|session| session.ipv6 == dst)
-                    .map(|session| {
-                        (
-                            session.sid,
-                            session.token,
-                            session.addr,
-                            session.xor_key.clone(),
-                            session.aes_key.clone(),
-                            session.enc,
-                            session.srlink,
-                        )
-                    })
-            }
-            _ => None,
-        }
-    };
-    let Some((sid, token, addr, xor_key, aes_key, enc, srlink)) = found else {
-        return;
-    };
-
-    if let Some(sr) = ctx.sr {
-        if sr.enabled() && srlink.is_some() {
-            if ctx.fragment {
-                send_sr_fragmented(ip_pkt, sid, token, addr, sr, ctx.sock);
-            } else {
-                send_sr_packet(
-                    ip_pkt, sid, token, addr, &xor_key, &aes_key, enc, sr, ctx.sock,
-                );
-            }
-            return;
-        }
-    }
-
-    if ctx.fragment {
-        send_fragmented(ip_pkt, sid, token, addr, ctx.sock);
-        return;
-    }
-
-    match version {
-        4 => {
-            let mut payload = ip_pkt.to_vec();
-            if enc != 0 {
-                if let Err(e) = encrypt_ipv4(&mut payload, &xor_key, &aes_key, enc) {
-                    eprintln!("data encrypt failed: {e}");
-                    return;
-                }
-            }
-            let typ = if enc == 0 {
-                protocol::PT_DATA
-            } else {
-                protocol::PT_DATA_ENC
-            };
-            let header = protocol::pkhdr(typ, enc, sid, token);
-            ctx.sock
-                .send_to(&protocol::data_pkt(&header, &payload), addr)
-                .ok();
-        }
-        6 => {
-            // The current Linux client emits IPv6 as type 0x23 without
-            // encrypting it; keep the same behavior on the downlink.
-            let header = protocol::pkhdr(protocol::PT_DATA_IPV6, 0, sid, token);
-            ctx.sock
-                .send_to(&protocol::data_pkt(&header, ip_pkt), addr)
-                .ok();
-        }
-        _ => {}
-    }
-}
-
-fn encrypt_ipv4(
-    payload: &mut Vec<u8>,
-    xor_key: &[u8],
-    aes_key: &[u8],
-    enc: u8,
-) -> Result<(), String> {
-    match enc {
-        0 => Ok(()),
-        1 => {
-            crypto::xor(payload, xor_key);
-            Ok(())
-        }
-        2 => {
-            let pad = (16 - payload.len() % 16) % 16;
-            payload.resize(payload.len() + pad, 0);
-            crypto::aes_ecb_encrypt(payload, aes_key)
-        }
-        n => Err(format!("unsupported encryption mode {n}")),
-    }
-}
-
-fn trim_ip(packet: &mut Vec<u8>) {
-    match packet.first().map(|b| b >> 4) {
-        Some(4) if packet.len() >= 4 => {
-            let total = u16::from_be_bytes([packet[2], packet[3]]) as usize;
-            if total >= 20 && total <= packet.len() {
-                packet.truncate(total);
-            }
-        }
-        Some(6) if packet.len() >= 40 => {
-            let payload = u16::from_be_bytes([packet[4], packet[5]]) as usize;
-            let total = 40 + payload;
-            if total <= packet.len() {
-                packet.truncate(total);
-            }
-        }
-        _ => {}
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn send_sr_packet(
-    ip_pkt: &[u8],
-    sid: u16,
-    token: u32,
-    addr: SocketAddr,
-    xor_key: &[u8],
-    aes_key: &[u8],
-    enc: u8,
-    sr: &SrConfig,
-    sock: &UdpSocket,
-) {
-    let version = ip_pkt[0] >> 4;
-    let inner_type = match version {
-        4 if enc == 0 => protocol::PT_DATA,
-        4 => protocol::PT_DATA_ENC,
-        6 => protocol::PT_DATA_IPV6,
-        _ => return,
-    };
-    let mut payload = ip_pkt.to_vec();
-    if version == 4 && enc != 0 {
-        if let Err(e) = encrypt_ipv4(&mut payload, xor_key, aes_key, enc) {
-            eprintln!("SR inner encrypt failed: {e}");
-            return;
-        }
-    }
-    let pad = if sr.mode == 0 {
-        0
-    } else {
-        let pad = (16 - payload.len() % 16) % 16;
-        payload.resize(payload.len() + pad, 0);
-        if let Err(e) = sr.encrypt(&mut payload) {
-            eprintln!("SR encrypt failed: {e}");
-            return;
-        }
-        pad
-    };
-
-    let links = &sr.links;
-    let linkcnt = links.len().min(6) as u8;
-    let mut pkt = Vec::with_capacity(4 + 4 * links.len() + 8 + payload.len());
-    pkt.push(protocol::PT_SEGRT);
-    pkt.push(0); // nextid
-    pkt.push(linkcnt);
-    pkt.push(((pad as u8) << 3) | (sr.mode & 7));
-    // Android parses wire links and reverses them back to forwardLinks.
-    for link in links.iter().rev().take(6) {
-        pkt.extend_from_slice(&link.to_be_bytes());
-    }
-    pkt.extend_from_slice(&protocol::pkhdr(inner_type, enc, sid, token));
-    pkt.extend_from_slice(&payload);
-    sock.send_to(&pkt, addr).ok();
-
-    if iwan::core::util::debug_enabled() {
-        eprintln!(
-            "[SR] sid={sid:#06x} links={linkcnt} pad={pad} inner=0x{inner_type:02x} len={}",
-            pkt.len()
-        );
-    }
-}
-
-fn send_fragmented(ip_pkt: &[u8], sid: u16, token: u32, addr: SocketAddr, sock: &UdpSocket) {
-    if ip_pkt.len() < 2 {
-        return;
-    }
-    let id: u32 = rand::random();
-    let half = ip_pkt.len() / 2;
-    let frag_type = if ip_pkt[0] >> 4 == 6 {
-        protocol::PT_IPFRAG_ALT
-    } else {
-        protocol::PT_IPFRAG
-    };
-    let send = |chunk: &[u8], off: u16, flag: u16| {
-        if chunk.len() > 0x7ff {
-            return;
-        }
-        let header = protocol::pkhdr(frag_type, 0, sid, token);
-        let mut pkt = Vec::with_capacity(16 + chunk.len());
-        pkt.extend_from_slice(&header);
-        pkt.extend_from_slice(&id.to_le_bytes());
-        let word = (off << 2) | flag;
-        let dword = (((chunk.len() as u32) & 0x7ff) << 15) | word as u32;
-        pkt.extend_from_slice(&dword.to_le_bytes());
-        pkt.extend_from_slice(chunk);
-        sock.send_to(&pkt, addr).ok();
-    };
-    // The client's reassembly table stores the first fragment, then on the
-    // second fragment with bit0 set copies first at 0 and second at off.
-    send(&ip_pkt[..half], 0, 0);
-    send(&ip_pkt[half..], half as u16, 1);
-    if iwan::core::util::debug_enabled() {
-        eprintln!("[FRAG] sid={sid:#06x} id={id:#010x} len={}", ip_pkt.len());
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn send_sr_fragmented(
-    ip_pkt: &[u8],
-    sid: u16,
-    token: u32,
-    addr: SocketAddr,
-    sr: &SrConfig,
-    sock: &UdpSocket,
-) {
-    // The client's onIPFRAG() performs the SR AES decrypt after reassembly
-    // but does not apply the XOR layer to fragments. Keep this path AES-only.
-    let mut ciphertext = ip_pkt.to_vec();
-    let pad = if sr.mode == 0 {
-        0
-    } else {
-        let pad = (16 - ciphertext.len() % 16) % 16;
-        ciphertext.resize(ciphertext.len() + pad, 0);
-        if let Err(e) = sr.encrypt(&mut ciphertext) {
-            eprintln!("SR fragment encrypt failed: {e}");
-            return;
-        }
-        pad
-    };
-    if ciphertext.len() < 2 {
-        return;
-    }
-    let id: u32 = rand::random();
-    let half = ciphertext.len() / 2;
-    let links = &sr.links;
-    let linkcnt = links.len().min(6) as u8;
-    let flags = ((pad as u8) << 3) | (sr.mode & 7);
-    let frag_type = if ip_pkt[0] >> 4 == 6 {
-        protocol::PT_IPFRAG_ALT
-    } else {
-        protocol::PT_IPFRAG
-    };
-    let send = |chunk: &[u8], off: u16, frag_flag: u16| {
-        let mut pkt = Vec::with_capacity(4 + 4 * links.len() + 16 + chunk.len());
-        pkt.push(protocol::PT_SEGRT);
-        pkt.push(0);
-        pkt.push(linkcnt);
-        pkt.push(flags);
-        for link in links.iter().rev().take(6) {
-            pkt.extend_from_slice(&link.to_be_bytes());
-        }
-        pkt.extend_from_slice(&protocol::pkhdr(frag_type, 0, sid, token));
-        pkt.extend_from_slice(&id.to_le_bytes());
-        let word = (off << 2) | frag_flag;
-        let dword = (((chunk.len() as u32) & 0x7ff) << 15) | word as u32;
-        pkt.extend_from_slice(&dword.to_le_bytes());
-        pkt.extend_from_slice(chunk);
-        sock.send_to(&pkt, addr).ok();
-    };
-    send(&ciphertext[..half], 0, 0);
-    send(&ciphertext[half..], half as u16, 1);
-    if iwan::core::util::debug_enabled() {
-        eprintln!(
-            "[SR+FRAG] sid={sid:#06x} id={id:#010x} len={} pad={pad}",
-            ciphertext.len()
-        );
-    }
 }

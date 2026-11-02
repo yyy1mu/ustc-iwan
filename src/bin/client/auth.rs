@@ -1,46 +1,51 @@
 use crate::cli;
 use anyhow::{Context, Result};
-use iwan::core::auth;
-use std::time::Duration;
+use iwan::core::{client, protocol, sr::SrKeyMode};
 
 pub fn run(args: &cli::AuthArgs) -> Result<()> {
-    let ct = auth::get_ct(&args.user, &args.pass, args.ct_pass.as_deref(), &args.salt)?;
-    let pipe = (args.pipeid != 0).then_some((args.pipeidx, args.pipeid));
-    let srlink = args
-        .sr_links
-        .first()
-        .copied()
-        .or_else(|| (args.sr_encrypt_mode != 0).then_some(1));
-    let nonce = auth::rand_u32();
-    let open = auth::build_open(&args.user, &ct, args.mtu, args.encrypt, pipe, srlink, nonce);
-    let sock = auth::udp_connect(&args.server, args.port, 3000, args.bind.as_deref())?;
-
-    for i in 0u32..=3 {
-        sock.send(&open).context("send OPEN")?;
-        println!("[{i}] -> OPEN ({}B) nonce={:08x}", open.len(), nonce);
-        let mut buf = [0u8; 4096];
-        match sock.recv(&mut buf) {
-            Ok(m) => match auth::parse_ack(&buf[..m], nonce) {
-                Ok(a) => {
-                    println!(
-                        "OK sid={:#06x} tok={:#010x} tun={} gw={} dns={} mtu={} enc={:?} ipv6={:?} av={:?}",
-                        a.sid, a.tok, a.tun, a.gw, a.dns, a.mtu, a.enc, a.ipv6, a.auth_verify
-                    );
-                    let c = iwan::core::protocol::pkhdr(
-                        iwan::core::protocol::PT_CLOSE,
-                        args.encrypt,
-                        a.sid,
-                        a.tok,
-                    );
-                    let _ = sock.send(&iwan::core::protocol::ctrl_pkt(&c, &[]));
-                    println!("-> CLOSE");
-                    return Ok(());
-                }
-                Err(e) => eprintln!("  err: {e}"),
-            },
-            Err(e) => eprintln!("  timeout: {e}"),
-        }
-        std::thread::sleep(Duration::from_millis(1000));
-    }
-    anyhow::bail!("auth failed");
+    let sr = iwan::core::sr::SrConfig::from_options(
+        &args.sr_password,
+        &args.sr_links,
+        args.sr_encrypt_mode,
+        SrKeyMode::parse(&args.sr_key_mode).context("invalid --sr-key-mode")?,
+    );
+    let session = client::open(&client::SessionConfig {
+        server: &args.server,
+        port: args.port,
+        user: &args.user,
+        pass: &args.pass,
+        ct_pass: args.ct_pass.as_deref(),
+        salt: &args.salt,
+        mtu: args.mtu,
+        encrypt: args.encrypt,
+        bind: args.bind.as_deref(),
+        pipe: (args.pipeid != 0).then_some((args.pipeidx, args.pipeid)),
+        srlink: args
+            .sr_links
+            .first()
+            .copied()
+            .or_else(|| (args.sr_encrypt_mode != 0).then_some(1)),
+        sr,
+    })?;
+    println!(
+        "OK sid={:#06x} tok={:#010x} tun={} gw={} dns={} mtu={} enc={} ipv6={:?} av={:?}",
+        session.auth.sid,
+        session.auth.tok,
+        session.auth.tun,
+        session.auth.gw,
+        session.auth.dns,
+        session.auth.mtu,
+        session.encryption,
+        session.auth.ipv6,
+        session.auth.auth_verify
+    );
+    let close = protocol::pkhdr(
+        protocol::PT_CLOSE,
+        session.encryption,
+        session.auth.sid,
+        session.auth.tok,
+    );
+    let _ = session.sock.send(&protocol::ctrl_pkt(&close, &[]));
+    println!("-> CLOSE");
+    Ok(())
 }

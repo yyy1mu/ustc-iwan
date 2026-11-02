@@ -15,6 +15,5 @@ pub struct Session {
     #[allow(dead_code)]
     pub pipeidx: Option<u16>,
     pub srlink: Option<u32>,
-    #[allow(dead_code)]
-    pub created: Instant,
+    pub last_seen: Instant,
 }
