@@ -1,6 +1,5 @@
 mod cli;
 #[cfg(target_os = "linux")]
-#[cfg(target_os = "linux")]
 mod downlink;
 #[cfg(target_os = "linux")]
 mod fragment;
@@ -21,10 +20,9 @@ use std::collections::HashMap;
 #[cfg(target_os = "linux")]
 use std::net::{Ipv4Addr, UdpSocket};
 #[cfg(target_os = "linux")]
+use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(target_os = "linux")]
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-#[cfg(target_os = "linux")]
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 #[cfg(target_os = "linux")]
 use std::time::{Duration, Instant};
 
@@ -49,8 +47,7 @@ fn main() -> Result<()> {
     configure_tun(&cli, prefix);
     let nat_added = nat::setup(&cli.subnet, &cli.nat_if);
 
-    let next_ip = AtomicU32::new(u32::from(subnet_ip) + 2);
-    let next_ipv6 = AtomicU32::new(1);
+    let sessions = session::SessionTable::new(cli.max_sessions, subnet_ip, prefix);
     let sr_key_mode = iwan::core::sr::SrKeyMode::parse(&cli.sr_key_mode)
         .with_context(|| format!("invalid --sr-key-mode {}", cli.sr_key_mode))?;
     let sr = iwan::core::sr::SrConfig::from_options(
@@ -59,8 +56,7 @@ fn main() -> Result<()> {
         cli.sr_encrypt_mode,
         sr_key_mode,
     );
-    let sessions: handler::SessionMap = Arc::new(Mutex::new(HashMap::new()));
-    let fragments = Mutex::new(HashMap::new());
+    let fragments = fragment::FragmentTable::new(64);
 
     let sock = match UdpSocket::bind(format!("[::]:{}", cli.port)) {
         Ok(sock) => {
@@ -80,8 +76,6 @@ fn main() -> Result<()> {
         users: &users,
         sessions: &sessions,
         fragments: &fragments,
-        next_ip: &next_ip,
-        next_ipv6: &next_ipv6,
         server_ip: cli.server_ip,
         server_ipv6: cli.server_ipv6,
         dns: cli.dns,
@@ -120,8 +114,14 @@ fn main() -> Result<()> {
             }
         }
         if last_reap.elapsed() >= Duration::from_secs(1) {
-            handler::reap_sessions(&sessions, Duration::from_secs(120));
-            fragment::reap_fragments(&fragments, Duration::from_secs(30));
+            let reaped = sessions.reap(Duration::from_secs(120));
+            if reaped > 0 {
+                println!("reaped {reaped} idle session(s)");
+            }
+            let expired = fragments.reap(Duration::from_secs(30));
+            if expired > 0 {
+                println!("reaped {expired} stale fragment set(s)");
+            }
             last_reap = Instant::now();
         }
         // Drain the TUN queue. Reading only one packet per loop makes queued

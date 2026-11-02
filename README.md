@@ -45,6 +45,7 @@ SOCKS5/HTTP 模式由 smoltcp 在用户态生成完整的 TCP/IPv4 数据包，�
 - `DATA_DUP` / `DATA_ENC_DUP` 与 `T_DUPPKT`
 - MTU 校验
 - TUN 下行批量排空，修复高负载下约 100ms/包的队列延迟
+- 优雅退出、NAT 幂等、session/fragment 回收和容量上限
 
 ## 目录
 

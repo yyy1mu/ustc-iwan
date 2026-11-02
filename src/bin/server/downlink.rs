@@ -10,51 +10,30 @@ pub fn handle(ip_pkt: &mut [u8], ctx: &ServerContext<'_>) {
         return;
     }
     let version = ip_pkt[0] >> 4;
-    let found = {
-        let sessions = ctx.sessions.lock().unwrap();
-        match version {
-            4 if ip_pkt.len() >= 20 => {
-                let dst = Ipv4Addr::new(ip_pkt[16], ip_pkt[17], ip_pkt[18], ip_pkt[19]);
-                sessions
-                    .values()
-                    .find(|session| session.ip == dst)
-                    .map(|session| {
-                        (
-                            session.sid,
-                            session.token,
-                            session.addr,
-                            session.xor_key.clone(),
-                            session.aes_key.clone(),
-                            session.enc,
-                            session.srlink,
-                        )
-                    })
-            }
-            6 if ip_pkt.len() >= 40 => {
-                let mut a = [0u8; 16];
-                a.copy_from_slice(&ip_pkt[24..40]);
-                let dst = Ipv6Addr::from(a);
-                sessions
-                    .values()
-                    .find(|session| session.ipv6 == dst)
-                    .map(|session| {
-                        (
-                            session.sid,
-                            session.token,
-                            session.addr,
-                            session.xor_key.clone(),
-                            session.aes_key.clone(),
-                            session.enc,
-                            session.srlink,
-                        )
-                    })
-            }
-            _ => None,
+    let found = match version {
+        4 if ip_pkt.len() >= 20 => {
+            let dst = Ipv4Addr::new(ip_pkt[16], ip_pkt[17], ip_pkt[18], ip_pkt[19]);
+            ctx.sessions.find_by_ip(dst)
         }
+        6 if ip_pkt.len() >= 40 => {
+            let mut a = [0u8; 16];
+            a.copy_from_slice(&ip_pkt[24..40]);
+            ctx.sessions.find_by_ipv6(Ipv6Addr::from(a))
+        }
+        _ => None,
     };
-    let Some((sid, token, addr, xor_key, aes_key, enc, srlink)) = found else {
+    let Some(session) = found else {
         return;
     };
+    let (sid, token, addr, xor_key, aes_key, enc, srlink) = (
+        session.sid,
+        session.token,
+        session.addr,
+        session.xor_key,
+        session.aes_key,
+        session.enc,
+        session.srlink,
+    );
 
     if let Some(sr) = ctx.sr {
         if sr.enabled() && srlink.is_some() {

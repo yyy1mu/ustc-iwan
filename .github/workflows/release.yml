@@ -8,7 +8,22 @@ permissions:
   contents: write
 
 jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Format
+        run: cargo fmt --check
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --all-targets
+
   prepare-release:
+    needs: test
     runs-on: ubuntu-24.04
     env:
       GH_TOKEN: ${{ github.token }}
@@ -197,6 +212,8 @@ jobs:
 
   sync-r2:
     needs: release
+    # R2 is optional; a missing secret must not mark the GitHub release failed.
+    continue-on-error: true
     uses: ./.github/workflows/r2-sync.yml
     with:
       tag: ${{ github.ref_name }}

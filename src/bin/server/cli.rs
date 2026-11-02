@@ -52,4 +52,7 @@ pub struct Cli {
     /// T_DUPPKT value advertised to clients (0 disables duplicate TX).
     #[arg(long, default_value_t = 0)]
     pub duppkt: u8,
+    /// Maximum concurrent sessions.
+    #[arg(long, default_value_t = 1024)]
+    pub max_sessions: usize,
 }

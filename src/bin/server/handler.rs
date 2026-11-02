@@ -1,22 +1,16 @@
-use crate::fragment::SrFragment;
-use crate::session::Session;
+use crate::fragment::FragmentTable;
+use crate::session::{Session, SessionTable};
 use iwan::core::sr::SrConfig;
 use iwan::core::{crypto, protocol, tun};
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
 use std::os::fd::RawFd;
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::Instant;
-
-pub type SessionMap = Arc<Mutex<HashMap<u16, Session>>>;
 
 pub struct ServerContext<'a> {
     pub users: &'a HashMap<String, String>,
-    pub sessions: &'a SessionMap,
-    pub fragments: &'a Mutex<HashMap<(u16, u32), SrFragment>>,
-    pub next_ip: &'a AtomicU32,
-    pub next_ipv6: &'a AtomicU32,
+    pub sessions: &'a SessionTable,
+    pub fragments: &'a FragmentTable,
     pub server_ip: Ipv4Addr,
     pub server_ipv6: Ipv6Addr,
     pub dns: Ipv4Addr,
@@ -53,22 +47,10 @@ pub fn handle_udp(raw: &[u8], addr: SocketAddr, ctx: &ServerContext<'_>) {
         | protocol::PacketType::DataIpv6
         | protocol::PacketType::DataDup
         | protocol::PacketType::DataEncDup => {
-            let session = {
-                let mut sessions = ctx.sessions.lock().unwrap();
-                let Some(session) = sessions.get_mut(&sid) else {
-                    return;
-                };
-                if session.token != token {
-                    return;
-                }
-                session.last_seen = Instant::now();
-                (
-                    session.xor_key.clone(),
-                    session.aes_key.clone(),
-                    session.enc,
-                )
+            let Some(session) = ctx.sessions.snapshot(sid, token) else {
+                return;
             };
-            let (xor_key, aes_key, enc) = session;
+            let (xor_key, aes_key, enc) = (session.xor_key, session.aes_key, session.enc);
             let mut payload = raw[8..].to_vec();
             if raw_type == protocol::PT_DATA_ENC || raw_type == protocol::PT_DATA_ENC_DUP {
                 match enc {
@@ -90,21 +72,15 @@ pub fn handle_udp(raw: &[u8], addr: SocketAddr, ctx: &ServerContext<'_>) {
             }
         }
         protocol::PacketType::IpFragment | protocol::PacketType::IpFragmentIpv6 => {
-            crate::fragment::handle_fragment(raw, sid, token, ctx);
+            crate::fragment::handle_fragment(raw, sid, token, ctx.sessions, ctx.fragments, ctx.tun);
         }
         protocol::PacketType::Close => {
-            let mut sessions = ctx.sessions.lock().unwrap();
-            if let Some(session) = sessions.get(&sid) {
-                if session.token != token {
-                    return;
-                }
-            }
-            if let Some(session) = sessions.remove(&sid) {
+            if let Some(session) = ctx.sessions.remove(sid, token) {
                 println!("[{addr:?}] session {sid:#06x} (ip {}) closed", session.ip);
             }
         }
         protocol::PacketType::EchoRequest if protocol::verify_sig(raw) => {
-            touch_session(ctx, sid, token);
+            let _ = ctx.sessions.snapshot(sid, token);
             send_echo_response(ctx.sock, addr, raw)
         }
         protocol::PacketType::PingRequest if protocol::verify_sig(raw) => {
@@ -181,10 +157,11 @@ fn handle_open(raw: &[u8], addr: SocketAddr, ctx: &ServerContext<'_>) {
         return;
     }
 
-    let client_ip = Ipv4Addr::from(ctx.next_ip.fetch_add(1, Ordering::Relaxed));
-    let suffix = ctx.next_ipv6.fetch_add(1, Ordering::Relaxed) as u128;
-    let assigned_ipv6 =
-        client_ipv6.unwrap_or_else(|| Ipv6Addr::from(u128::from(ctx.server_ipv6) + suffix));
+    let Some(client_ip) = ctx.sessions.allocate_ipv4() else {
+        send_reject(ctx.sock, addr, "no available tunnel IP");
+        return;
+    };
+    let assigned_ipv6 = ctx.sessions.allocate_ipv6(client_ipv6, ctx.server_ipv6);
     let sid = (u32::from(client_ip) & 0xFFFF) as u16;
     let token: u32 = rand::random();
     let pipeid = pipe_raw.map(|p| p & 0x7fff);
@@ -223,24 +200,23 @@ fn handle_open(raw: &[u8], addr: SocketAddr, ctx: &ServerContext<'_>) {
     );
 
     let session_key = crypto::session_key(&user, &pass_plain);
-    let mut sessions = ctx.sessions.lock().unwrap();
-    sessions.insert(
+    if let Err(reason) = ctx.sessions.insert(Session {
         sid,
-        Session {
-            sid,
-            token,
-            addr,
-            ip: client_ip,
-            ipv6: assigned_ipv6,
-            xor_key: session_key[..8].to_vec(),
-            aes_key: session_key.to_vec(),
-            enc,
-            pipeid,
-            pipeidx,
-            srlink,
-            last_seen: Instant::now(),
-        },
-    );
+        token,
+        addr,
+        ip: client_ip,
+        ipv6: assigned_ipv6,
+        xor_key: session_key[..8].to_vec(),
+        aes_key: session_key.to_vec(),
+        enc,
+        srlink,
+        last_seen: Instant::now(),
+    }) {
+        ctx.sessions.release_ipv4(client_ip);
+        ctx.sessions.release_ipv6(assigned_ipv6);
+        eprintln!("[{addr:?}] OPEN reject: {reason}");
+        send_reject(ctx.sock, addr, reason);
+    }
 }
 
 fn handle_sr_echo(raw: &[u8], addr: SocketAddr, ctx: &ServerContext<'_>) {
@@ -257,15 +233,8 @@ fn handle_sr_echo(raw: &[u8], addr: SocketAddr, ctx: &ServerContext<'_>) {
     let mut inner = raw[srheader_len..].to_vec();
     let sid = u16::from_be_bytes([inner[2], inner[3]]);
     let token = u32::from_be_bytes([inner[4], inner[5], inner[6], inner[7]]);
-    {
-        let mut sessions = ctx.sessions.lock().unwrap();
-        let Some(session) = sessions.get_mut(&sid) else {
-            return;
-        };
-        if session.token != token {
-            return;
-        }
-        session.last_seen = Instant::now();
+    if ctx.sessions.snapshot(sid, token).is_none() {
+        return;
     }
 
     if inner_type == protocol::PT_ECHO_REQ {
@@ -300,7 +269,7 @@ fn handle_sr_echo(raw: &[u8], addr: SocketAddr, ctx: &ServerContext<'_>) {
 
     let typ = inner[0];
     if typ == protocol::PT_IPFRAG || typ == protocol::PT_IPFRAG_ALT {
-        crate::fragment::handle_fragment(&inner, sid, token, ctx);
+        crate::fragment::handle_fragment(&inner, sid, token, ctx.sessions, ctx.fragments, ctx.tun);
         return;
     }
     if typ != protocol::PT_DATA
@@ -313,14 +282,9 @@ fn handle_sr_echo(raw: &[u8], addr: SocketAddr, ctx: &ServerContext<'_>) {
     }
     let mut payload = inner[8..].to_vec();
     if typ == protocol::PT_DATA_ENC || typ == protocol::PT_DATA_ENC_DUP {
-        let mut sessions = ctx.sessions.lock().unwrap();
-        let Some(session) = sessions.get_mut(&sid) else {
+        let Some(session) = ctx.sessions.snapshot(sid, token) else {
             return;
         };
-        if session.token != token {
-            return;
-        }
-        session.last_seen = Instant::now();
         match session.enc {
             1 => crypto::xor(&mut payload, &session.xor_key),
             2 if crypto::aes_ecb_decrypt(&mut payload, &session.aes_key).is_err() => return,
@@ -340,25 +304,6 @@ fn handle_sr_echo(raw: &[u8], addr: SocketAddr, ctx: &ServerContext<'_>) {
     }
 }
 
-fn touch_session(ctx: &ServerContext<'_>, sid: u16, token: u32) {
-    let mut sessions = ctx.sessions.lock().unwrap();
-    if let Some(session) = sessions.get_mut(&sid) {
-        if session.token == token {
-            session.last_seen = Instant::now();
-        }
-    }
-}
-
-pub fn reap_sessions(sessions: &SessionMap, idle: std::time::Duration) {
-    let mut sessions = sessions.lock().unwrap();
-    let before = sessions.len();
-    sessions.retain(|_, session| session.last_seen.elapsed() < idle);
-    let removed = before.saturating_sub(sessions.len());
-    if removed > 0 {
-        println!("reaped {removed} idle session(s)");
-    }
-}
-
 fn send_reject(sock: &UdpSocket, addr: SocketAddr, msg: &str) {
     let header = protocol::pkhdr(protocol::PT_OPEN_REJECT, 0, 0, 0);
     let body = protocol::tlv(protocol::T_ERR_MSG, msg.as_bytes());
@@ -372,4 +317,114 @@ fn send_echo_response(sock: &UdpSocket, addr: SocketAddr, raw: &[u8]) {
     let payload = raw.get(24..).unwrap_or(&[]);
     sock.send_to(&protocol::ctrl_pkt(&header, payload), addr)
         .ok();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fragment::FragmentTable;
+    use crate::session::SessionTable;
+    use iwan::core::auth;
+    use iwan::core::sr::{SrConfig, SrKeyMode};
+    use iwan::core::tunnel::{encode_uplink_sr, TunnelRx};
+    use std::io::Read;
+    use std::os::fd::AsRawFd;
+    use std::os::unix::net::UnixStream;
+
+    fn ipv4_packet(len: usize) -> Vec<u8> {
+        let mut packet = vec![0u8; len];
+        packet[0] = 0x45;
+        packet[2..4].copy_from_slice(&(len as u16).to_be_bytes());
+        packet[9] = 17;
+        packet
+    }
+
+    #[test]
+    fn handshake_sr_duplicate_and_downlink_without_root() {
+        let users = HashMap::from([("test".to_string(), "pass".to_string())]);
+        let sessions = SessionTable::new(8, Ipv4Addr::new(10, 10, 1, 0), 24);
+        let fragments = FragmentTable::new(8);
+        let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let client = UdpSocket::bind("127.0.0.1:0").unwrap();
+        client
+            .set_read_timeout(Some(std::time::Duration::from_secs(1)))
+            .unwrap();
+        let (tun_write, mut tun_read) = UnixStream::pair().unwrap();
+        let sr = SrConfig::from_options("0123456789abcdef", &[1], 1, SrKeyMode::Raw).unwrap();
+
+        let ctx = ServerContext {
+            users: &users,
+            sessions: &sessions,
+            fragments: &fragments,
+            server_ip: Ipv4Addr::new(10, 10, 1, 1),
+            server_ipv6: "fd00::1".parse().unwrap(),
+            dns: Ipv4Addr::new(114, 114, 114, 114),
+            dns2: Ipv4Addr::new(223, 5, 5, 5),
+            dns_ipv6: "fd00::53".parse().unwrap(),
+            sr: Some(&sr),
+            fragment: false,
+            salt: "",
+            duppkt: 0,
+            sock: &server,
+            tun: tun_write.as_raw_fd(),
+        };
+
+        let key = iwan::core::crypto::session_key("test", "pass");
+        let xor_key = &key[..8];
+        let aes_key = &key;
+        let nonce = auth::rand_u32();
+        let ct = auth::get_ct("test", "pass", None, "").unwrap();
+        let open = auth::build_open("test", &ct, 1400, 1, None, Some(1), nonce);
+        let server_addr = server.local_addr().unwrap();
+        client.send_to(&open, server_addr).unwrap();
+        let mut packet = [0u8; 2048];
+        let (n, addr) = server.recv_from(&mut packet).unwrap();
+        handle_udp(&packet[..n], addr, &ctx);
+        let mut ack = [0u8; 2048];
+        let (n, _) = client.recv_from(&mut ack).unwrap();
+        let auth_result = auth::parse_ack(&ack[..n], nonce).unwrap();
+
+        let ip = ipv4_packet(40);
+        let wire = encode_uplink_sr(
+            &ip,
+            xor_key,
+            aes_key,
+            auth_result.sid,
+            auth_result.tok,
+            1,
+            &sr,
+        )
+        .unwrap();
+
+        for _ in 0..2 {
+            client.send_to(&wire, server_addr).unwrap();
+            let (n, addr) = server.recv_from(&mut packet).unwrap();
+            handle_udp(&packet[..n], addr, &ctx);
+            let mut received = vec![0u8; 2048];
+            let len = tun_read.read(&mut received).unwrap();
+            assert_eq!(&received[..len], &ip[..]);
+        }
+
+        let mut downlink = ipv4_packet(40);
+        downlink[12..16].copy_from_slice(&[10, 10, 1, 1]);
+        downlink[16..20].copy_from_slice(&auth_result.tun.parse::<Ipv4Addr>().unwrap().octets());
+        downlink[9] = 1;
+        crate::downlink::handle(&mut downlink, &ctx);
+
+        let mut wire_down = [0u8; 4096];
+        let (n, _) = client.recv_from(&mut wire_down).unwrap();
+        let mut rx = TunnelRx::new(
+            xor_key,
+            aes_key,
+            auth_result.enc.unwrap_or(0),
+            auth_result.sid,
+            auth_result.tok,
+            Some(sr),
+        );
+        let mut decoded = Vec::new();
+        rx.handle(&wire_down[..n], &mut |packet| decoded.push(packet.to_vec()))
+            .unwrap();
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(&decoded[0][..40], &downlink[..40]);
+    }
 }

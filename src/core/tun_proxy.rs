@@ -148,6 +148,20 @@ impl UploadBatch {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn encode_sr_from_slot(
+    slot: &[u8],
+    len: usize,
+    xor_key: &[u8],
+    aes_key: &[u8],
+    sid: u16,
+    token: u32,
+    encryption: u8,
+    sr: &crate::core::sr::SrConfig,
+) -> anyhow::Result<Vec<u8>> {
+    encode_uplink_sr(&slot[..len], xor_key, aes_key, sid, token, encryption, sr)
+}
+
 /// Options for the TUN↔UDP data-plane pump.
 pub struct PumpConfig<'a> {
     pub tun_fd: RawFd,
@@ -276,7 +290,7 @@ pub fn run_pump(config: PumpConfig<'_>) -> Result<PumpOutcome> {
                 let n = n as usize;
                 if let Some(sr) = &sr_tx {
                     let slot = batch.slot();
-                    match encode_uplink_sr(slot, &xk_send, &aes_send, sid, tok, enc, sr) {
+                    match encode_sr_from_slot(slot, n, &xk_send, &aes_send, sid, tok, enc, sr) {
                         Ok(packet) => {
                             batch.queue_packet(&packet);
                             if duplicate {
@@ -517,5 +531,23 @@ fn expand_route_targets(targets: &[String]) -> Result<Vec<String>> {
 fn push_unique(routes: &mut Vec<String>, route: String) {
     if !routes.iter().any(|r| r == &route) {
         routes.push(route);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::sr::{SrConfig, SrKeyMode};
+
+    #[test]
+    fn sr_upload_uses_actual_tun_length() {
+        let sr = SrConfig::from_options("0123456789abcdef", &[1], 1, SrKeyMode::Raw).unwrap();
+        let slot = vec![0u8; SLOT];
+        let wire = encode_sr_from_slot(&slot, 40, &[0u8; 8], &[0u8; 16], 1, 2, 1, &sr).unwrap();
+        assert!(
+            wire.len() < 100,
+            "SR encoded the whole slot: {}",
+            wire.len()
+        );
     }
 }
