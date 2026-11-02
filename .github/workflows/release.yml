@@ -1,4 +1,4 @@
-name: Build
+name: Release
 
 on:
   push:
@@ -8,12 +8,7 @@ permissions:
   contents: write
 
 jobs:
-  test:
-    # Reuse the same checks as CI instead of maintaining a second copy.
-    uses: ./.github/workflows/ci.yml
-
   prepare-release:
-    needs: test
     runs-on: ubuntu-24.04
     env:
       GH_TOKEN: ${{ github.token }}
@@ -204,16 +199,3 @@ jobs:
           else
             gh release edit "$RELEASE_TAG" --draft=false
           fi
-
-  sync-r2:
-    needs: release
-    # R2 is optional. Set repository variable R2_ENABLED=true after configuring
-    # both R2 secrets; otherwise the sync job is skipped and the release remains green.
-    if: vars.R2_ENABLED == 'true'
-    uses: ./.github/workflows/r2-sync.yml
-    with:
-      tag: ${{ github.ref_name }}
-      require_current_matrix: true
-    secrets:
-      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}

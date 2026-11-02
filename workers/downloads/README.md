@@ -87,7 +87,7 @@ npm run logs
 
 ## Release 与 R2 同步
 
-`.github/workflows/release.yml` 保持 `v*` tag 触发；全部平台构建发布到 GitHub 后，调用 `r2-sync.yml` 同步到 R2。新版本要求全部 29 个平台压缩包齐全。
+`.github/workflows/release.yml` 只负责 `v*` tag 的 GitHub Release 构建和发布，不自动同步 R2。R2 同步通过本地/手动运行脚本完成；新版本仍要求全部 29 个平台压缩包齐全。
 
 同步过程：
 
@@ -117,7 +117,7 @@ python3 scripts/sync_r2.py --all --plan
 python3 scripts/sync_r2.py --tag v26.9.1 --plan --require-current-matrix
 ```
 
-GitHub 手动执行 **Sync releases to R2**，`tag` 填 `all` 补传所有历史版本，填具体 tag 则补传该版本。历史版本关闭 `require_current_matrix`。工作流需先存在于默认分支，才会出现在手动运行列表。
+不再提供自动 R2 workflow。需要补传时手动运行 `scripts/sync_r2.py`；`--tag all` 补传所有历史版本，具体 tag 补传该版本，历史版本关闭 `--require-current-matrix`。
 
 本机已通过 `wrangler login` 和 `gh auth login` 登录时，可直接使用官方远程 R2 绑定补传，无需 S3 密钥：
 
