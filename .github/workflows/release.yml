@@ -9,18 +9,8 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.95.0
-        with:
-          components: rustfmt, clippy
-      - name: Format
-        run: cargo fmt --check
-      - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
-      - name: Test
-        run: cargo test --all-targets
+    # Reuse the same checks as CI instead of maintaining a second copy.
+    uses: ./.github/workflows/ci.yml
 
   prepare-release:
     needs: test
