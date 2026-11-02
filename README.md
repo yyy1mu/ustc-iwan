@@ -1,6 +1,6 @@
 # ustc-iwan
 
-USTC iWAN 命令行客户端：通过统一身份认证（OIDC）获取线路配置，并提供三种连接方式。
+USTC iWAN 客户端与兼容服务端实现：通过统一身份认证（OIDC）获取线路配置，提供 TUN、SOCKS5、HTTP 三种接入方式；VPN 协议与 **Panabit Android 2.4.3** 对齐。
 
 | 连接方式 | 平台 | 需要 root | 说明 |
 |----------|------|-----------|------|
@@ -9,6 +9,14 @@ USTC iWAN 命令行客户端：通过统一身份认证（OIDC）获取线路配
 | HTTP 代理 | Linux / macOS / Windows | 否 | 用户态 TCP/IP 栈，默认监听 8080 |
 
 SOCKS5/HTTP 模式由 smoltcp 在用户态生成完整的 TCP/IPv4 数据包，不创建网卡、不修改系统路由。
+
+本项目的重点是 VPN 客户端与数据面实现：
+
+- OIDC 登录、线路配置、按名称/序号/延迟自动选路
+- Linux TUN 隧道，以及 macOS/Windows 免 root 的 SOCKS5/HTTP 代理
+- Android 风格的认证、AES/XOR 数据加密、SR、分片和重复包协议
+- 断线重连、心跳检测、默认路由变化恢复
+- 兼容 Panabit Android 2.4.3 的 client/server VPN 协议
 
 仓库包含三个二进制：
 
@@ -20,7 +28,7 @@ SOCKS5/HTTP 模式由 smoltcp 在用户态生成完整的 TCP/IPv4 数据包，�
 
 ## v26.11.0 更新内容
 
-本版本将 client 与 server 的 VPN 协议层对齐 Panabit Android 2.4.3，不包含 APK 的 UI/应用层逻辑。
+v26.11.0 完成 client 与 server 的 VPN 协议栈对齐 **Panabit Android 2.4.3**，重点覆盖认证、加密、SR、分片、重复包、心跳和重连能力。
 
 ### Client
 
