@@ -44,19 +44,47 @@ fn main() -> Result<()> {
     configure_tun(&cli, prefix);
 
     let next_ip = AtomicU32::new(u32::from(subnet_ip) + 2);
+    let next_ipv6 = AtomicU32::new(1);
+    let sr_key_mode = iwan::core::sr::SrKeyMode::parse(&cli.sr_key_mode)
+        .with_context(|| format!("invalid --sr-key-mode {}", cli.sr_key_mode))?;
+    let sr = iwan::core::sr::SrConfig::from_options(
+        &cli.sr_password,
+        &cli.sr_links,
+        cli.sr_encrypt_mode,
+        sr_key_mode,
+    );
     let sessions: handler::SessionMap = Arc::new(Mutex::new(HashMap::new()));
+    let fragments = Mutex::new(HashMap::new());
 
-    let sock = UdpSocket::bind(format!("0.0.0.0:{}", cli.port)).context("bind UDP")?;
+    let sock = match UdpSocket::bind(format!("[::]:{}", cli.port)) {
+        Ok(sock) => {
+            println!("listening UDP [::]:{} (dual-stack)", cli.port);
+            sock
+        }
+        Err(_) => {
+            let sock = UdpSocket::bind(format!("0.0.0.0:{}", cli.port)).context("bind UDP")?;
+            println!("listening UDP 0.0.0.0:{} (IPv4 only)", cli.port);
+            sock
+        }
+    };
     sock.set_read_timeout(Some(Duration::from_millis(100)))?;
-    println!("listening UDP 0.0.0.0:{}", cli.port);
     println!("server ready.");
 
     let ctx = handler::ServerContext {
         users: &users,
         sessions: &sessions,
+        fragments: &fragments,
         next_ip: &next_ip,
+        next_ipv6: &next_ipv6,
         server_ip: cli.server_ip,
+        server_ipv6: cli.server_ipv6,
         dns: cli.dns,
+        dns2: cli.dns2,
+        dns_ipv6: cli.dns_ipv6,
+        sr: sr.as_ref(),
+        fragment: cli.fragment,
+        salt: &cli.salt,
+        duppkt: cli.duppkt,
         sock: &sock,
         tun: tun_fd,
     };
@@ -79,13 +107,26 @@ fn main() -> Result<()> {
                 break;
             }
         }
-        let r = tun::tun_read(tun_fd, &mut tun_buf);
-        if r > 0 {
-            handler::handle_tun_downlink(&mut tun_buf[..r as usize], &sessions, &sock);
-        } else if r < 0 {
-            let e = std::io::Error::last_os_error();
-            if e.kind() != std::io::ErrorKind::WouldBlock {
-                eprintln!("tun read err: {e}");
+        // Drain the TUN queue. Reading only one packet per loop makes queued
+        // downlink wait for the next 100 ms UDP timeout, which caps downlink
+        // at ~10 packets/s and causes multi-second TCP stalls under load.
+        let mut drained = 0;
+        loop {
+            let r = tun::tun_read(tun_fd, &mut tun_buf);
+            if r > 0 {
+                handler::handle_tun_downlink(&mut tun_buf[..r as usize], &ctx);
+                drained += 1;
+                if drained >= 256 {
+                    break;
+                }
+            } else {
+                if r < 0 {
+                    let e = std::io::Error::last_os_error();
+                    if e.kind() != std::io::ErrorKind::WouldBlock {
+                        eprintln!("tun read err: {e}");
+                    }
+                }
+                break;
             }
         }
     }
@@ -180,4 +221,13 @@ fn configure_tun(cli: &cli::Cli, prefix: u8) {
         "dev",
         &cli.tun,
     ]);
+    ip_run(&[
+        "-6",
+        "addr",
+        "add",
+        &format!("{}/{}", cli.server_ipv6, cli.ipv6_prefix),
+        "dev",
+        &cli.tun,
+    ]);
+    ip_run(&["-6", "route", "replace", &cli.ipv6_subnet, "dev", &cli.tun]);
 }

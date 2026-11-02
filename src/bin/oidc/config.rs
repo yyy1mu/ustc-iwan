@@ -15,6 +15,12 @@ pub(crate) struct Server {
     pub(crate) username: String,
     #[serde(default, rename = "passWord")]
     pub(crate) password: String,
+    /// Android/iWAN server-list password salt.
+    #[serde(default)]
+    pub(crate) salt: String,
+    /// Server-list MTU override; zero/None uses the CLI default.
+    #[serde(default)]
+    pub(crate) mtu: Option<u16>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]

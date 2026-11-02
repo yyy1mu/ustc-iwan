@@ -66,15 +66,17 @@ pub fn setup(
     util::ip_run(&["link", "set", tun, "up"]);
     util::ip_run(&["link", "set", "dev", tun, "mtu", &mtu.to_string()]);
     util::ip_run(&["addr", "add", &format!("{tun_ip}/24"), "dev", tun]);
-    util::ip_run(&[
-        "route",
-        "add",
-        &format!("{srv}/32"),
-        "via",
-        ogw,
-        "dev",
-        odev,
-    ]);
+    if srv.parse::<std::net::Ipv4Addr>().is_ok() {
+        util::ip_run(&[
+            "route",
+            "add",
+            &format!("{srv}/32"),
+            "via",
+            ogw,
+            "dev",
+            odev,
+        ]);
+    }
     util::ip_run(&["route", "flush", "cache"]);
 
     for c in routes {
@@ -100,7 +102,9 @@ pub fn teardown(tun: &str, srv: &str, ogw: &str, odev: &str, routes: &[String]) 
             let _ = util::ip_run(&["route", "del", c]);
         }
     }
-    let _ = util::ip_run(&["route", "del", &format!("{srv}/32")]);
+    if srv.parse::<std::net::Ipv4Addr>().is_ok() {
+        let _ = util::ip_run(&["route", "del", &format!("{srv}/32")]);
+    }
     let _ = util::ip_run(&["addr", "flush", "dev", tun]);
     let _ = util::ip_run(&["link", "set", tun, "down"]);
     let _ = util::ip_run(&["route", "flush", "cache"]);

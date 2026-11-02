@@ -8,8 +8,10 @@ pub(crate) mod netstack;
 pub mod protocol;
 #[cfg(target_os = "linux")]
 pub mod route;
+pub mod sr;
 #[cfg(target_os = "linux")]
 pub mod tun;
 #[cfg(target_os = "linux")]
 pub mod tun_proxy;
+pub mod tunnel;
 pub mod util;

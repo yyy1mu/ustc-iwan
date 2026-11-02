@@ -30,6 +30,10 @@ pub struct Cli {
     #[arg(long)]
     pub all: bool,
 
+    /// Ping all configured servers and connect to the lowest-latency one.
+    #[arg(long)]
+    pub auto: bool,
+
     // ── proxy options (used with --connect) ──
     /// TUN device name.
     #[cfg(target_os = "linux")]
@@ -57,7 +61,7 @@ pub struct Cli {
     pub proxy_domain: Vec<String>,
 
     /// Encryption method: 0=None, 1=XOR, 2=AES.
-    #[arg(long, default_value = "1")]
+    #[arg(long, default_value = "1", value_parser = clap::value_parser!(u8).range(0..=2))]
     pub encrypt: u8,
 
     /// Use a rootless userspace SOCKS5 proxy instead of a TUN device.
@@ -88,4 +92,32 @@ pub struct Cli {
     /// Default: the active physical NIC, wired before wireless.
     #[arg(long)]
     pub bind: Option<String>,
+
+    /// Pipe ID for server-side multi-path selection (0 = disabled).
+    #[arg(long, default_value_t = 0)]
+    pub pipeid: u16,
+    /// Pipe direction/bit (0 or 1), only used when pipeid != 0.
+    #[arg(long, default_value_t = 0)]
+    pub pipeidx: u16,
+    /// SR link labels; comma-separated. Must match the server.
+    #[arg(long, value_delimiter = ',')]
+    pub sr_links: Vec<u32>,
+    /// SR password; used only when sr_encrypt_mode != 0.
+    #[arg(long, default_value = "test")]
+    pub sr_password: String,
+    /// SR encryption mode: 0=off, 1=AES-128, 2=AES-256.
+    #[arg(long, default_value_t = 0)]
+    pub sr_encrypt_mode: u8,
+    /// SR key derivation: jhash (Linux) or raw (Android ingress password).
+    #[arg(long, default_value = "jhash")]
+    pub sr_key_mode: String,
+    /// Android-style password salt (empty keeps Linux/Rust derivation).
+    #[arg(long, default_value = "")]
+    pub salt: String,
+    /// Local SR ID included in SrmonPkt.
+    #[arg(long, default_value_t = 0)]
+    pub sr_local_id: u32,
+    /// Send each data packet twice using DATA_DUP/DATA_ENC_DUP.
+    #[arg(long)]
+    pub duplicate: bool,
 }

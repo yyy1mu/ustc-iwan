@@ -4,9 +4,15 @@ use iwan::core::auth;
 use std::time::Duration;
 
 pub fn run(args: &cli::AuthArgs) -> Result<()> {
-    let ct = auth::get_ct(&args.user, &args.pass, args.ct_pass.as_deref())?;
-    let nonce = auth::rand_u32()?;
-    let open = auth::build_open(&args.user, &ct, args.mtu, args.encrypt, nonce);
+    let ct = auth::get_ct(&args.user, &args.pass, args.ct_pass.as_deref(), &args.salt)?;
+    let pipe = (args.pipeid != 0).then_some((args.pipeidx, args.pipeid));
+    let srlink = args
+        .sr_links
+        .first()
+        .copied()
+        .or_else(|| (args.sr_encrypt_mode != 0).then_some(1));
+    let nonce = auth::rand_u32();
+    let open = auth::build_open(&args.user, &ct, args.mtu, args.encrypt, pipe, srlink, nonce);
     let sock = auth::udp_connect(&args.server, args.port, 3000, args.bind.as_deref())?;
 
     for i in 0u32..=3 {
@@ -17,8 +23,8 @@ pub fn run(args: &cli::AuthArgs) -> Result<()> {
             Ok(m) => match auth::parse_ack(&buf[..m], nonce) {
                 Ok(a) => {
                     println!(
-                        "OK sid={:#06x} tok={:#010x} tun={} gw={} dns={} mtu={}",
-                        a.sid, a.tok, a.tun, a.gw, a.dns, a.mtu
+                        "OK sid={:#06x} tok={:#010x} tun={} gw={} dns={} mtu={} enc={:?} ipv6={:?} av={:?}",
+                        a.sid, a.tok, a.tun, a.gw, a.dns, a.mtu, a.enc, a.ipv6, a.auth_verify
                     );
                     let c = iwan::core::protocol::pkhdr(
                         iwan::core::protocol::PT_CLOSE,

@@ -8,6 +8,12 @@ pub const PT_ECHO_REQ: u8 = 0x15;
 pub const PT_ECHO_RES: u8 = 0x16;
 pub const PT_CLOSE: u8 = 0x17;
 pub const PT_DATA_ENC: u8 = 0x18;
+pub const PT_DATA_DUP: u8 = 0x19;
+pub const PT_DATA_ENC_DUP: u8 = 0x20;
+pub const PT_IPFRAG: u8 = 0x22;
+pub const PT_IPFRAG_ALT: u8 = 0x24;
+pub const PT_DATA_IPV6: u8 = 0x23;
+pub const PT_SEGRT: u8 = 0x28;
 pub const PT_PING_REQ: u8 = 0x29;
 pub const PT_PING_RSP: u8 = 0x2A;
 
@@ -18,6 +24,11 @@ pub const T_IP: u8 = 0x04;
 pub const T_DNS: u8 = 0x05;
 pub const T_GATEWAY: u8 = 0x06;
 pub const T_ENCRYPT: u8 = 0x08;
+pub const T_DUPPKT: u8 = 0x09;
+pub const T_PIPE: u8 = 0x0A;
+pub const T_IPV6: u8 = 0x0B;
+pub const T_DNS6: u8 = 0x0C;
+pub const T_GATEWAY6: u8 = 0x0D;
 pub const T_AUTH_VERIFY: u8 = 0x0F;
 pub const T_ERR_MSG: u8 = 0x10;
 

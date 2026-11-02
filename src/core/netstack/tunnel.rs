@@ -1,5 +1,8 @@
 use super::IpTunnelDevice;
-use crate::core::{crypto, protocol};
+use crate::core::{
+    crypto, protocol,
+    tunnel::{encode_uplink, encode_uplink_sr, TunnelRx},
+};
 use anyhow::{Context, Result};
 use smoltcp::wire::{IpAddress, Ipv4Packet, TcpPacket};
 use std::io::ErrorKind;
@@ -12,12 +15,13 @@ pub(crate) const VPN_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
 pub(crate) fn receive_vpn(
     sock: &UdpSocket,
     device: &mut IpTunnelDevice,
-    xor_key: &[u8],
+    rx: &mut TunnelRx,
     sid: u16,
     token: u32,
     mtu: usize,
-    encryption: u8,
+    _encryption: u8,
     session_started: Instant,
+    last_echo_response: &mut Instant,
 ) -> Result<()> {
     let mut buf = vec![0u8; 65535];
     loop {
@@ -26,10 +30,10 @@ pub(crate) fn receive_vpn(
                 let packet_type = buf[0];
                 let packet_sid = u16::from_be_bytes([buf[2], buf[3]]);
                 let packet_token = u32::from_be_bytes([buf[4], buf[5], buf[6], buf[7]]);
-                if packet_sid != sid || packet_token != token {
-                    continue;
-                }
                 if packet_type == protocol::PT_CLOSE {
+                    if packet_sid != sid || packet_token != token {
+                        continue;
+                    }
                     anyhow::bail!(
                         "VPN server closed the session after {:?}: len={n} enc={} sid={:#06x} \
                          token={:#010x} payload={}",
@@ -41,22 +45,22 @@ pub(crate) fn receive_vpn(
                     );
                 }
                 if packet_type == protocol::PT_ECHO_REQ {
-                    let header = protocol::pkhdr(protocol::PT_ECHO_RES, encryption, sid, token);
-                    sock.send(&protocol::ctrl_pkt(&header, &[]))
+                    let payload = buf.get(24..n).unwrap_or(&[]);
+                    let header = protocol::pkhdr(protocol::PT_ECHO_RES, buf[1], sid, token);
+                    sock.send(&protocol::ctrl_pkt(&header, payload))
                         .context("send VPN keepalive response")?;
                     continue;
                 }
-                if packet_type != protocol::PT_DATA && packet_type != protocol::PT_DATA_ENC {
+                if packet_type == protocol::PT_ECHO_RES {
+                    *last_echo_response = Instant::now();
                     continue;
                 }
-                let mut packet = buf[8..n].to_vec();
-                if packet_type == protocol::PT_DATA_ENC {
-                    crypto::xor(&mut packet, xor_key);
-                }
-                if validate_inner_ipv4(&packet, mtu) {
-                    log_tcp_packet("VPN RX", &packet);
-                    device.push_rx_packet(packet);
-                }
+                rx.handle(&buf[..n], &mut |packet| {
+                    if validate_inner_ipv4(packet, mtu) {
+                        log_tcp_packet("VPN RX", packet);
+                        device.push_rx_packet(packet.to_vec());
+                    }
+                })?;
             }
             Ok(_) => {}
             Err(e) if e.kind() == ErrorKind::WouldBlock => return Ok(()),
@@ -75,8 +79,14 @@ pub(crate) fn send_vpn_keepalive(
     if last_keepalive.elapsed() < VPN_KEEPALIVE_INTERVAL {
         return Ok(());
     }
+    let mut payload = vec![0u8; 36];
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_micros() as u64;
+    payload[..8].copy_from_slice(&now.to_le_bytes());
     let header = protocol::pkhdr(protocol::PT_ECHO_REQ, encryption, sid, token);
-    sock.send(&protocol::ctrl_pkt(&header, &[]))
+    sock.send(&protocol::ctrl_pkt(&header, &payload))
         .context("send VPN keepalive")?;
     *last_keepalive = Instant::now();
     Ok(())
@@ -86,21 +96,45 @@ pub(crate) fn send_vpn(
     sock: &UdpSocket,
     device: &mut IpTunnelDevice,
     xor_key: &[u8],
+    aes_key: &[u8],
     sid: u16,
     token: u32,
     encryption: u8,
+    sr: Option<&crate::core::sr::SrConfig>,
+    duplicate: bool,
 ) -> Result<()> {
     while let Some(mut packet) = device.pop_tx_packet() {
         log_tcp_packet("VPN TX", &packet);
-        let packet_type = if encryption == 0 {
-            protocol::PT_DATA
-        } else {
-            crypto::xor(&mut packet, xor_key);
-            protocol::PT_DATA_ENC
-        };
-        let header = protocol::pkhdr(packet_type, encryption, sid, token);
-        sock.send(&protocol::data_pkt(&header, &packet))
+        if let Some(sr) = sr {
+            let wire = encode_uplink_sr(&packet, xor_key, aes_key, sid, token, encryption, sr)?;
+            sock.send(&wire).context("send SR VPN packet")?;
+            if duplicate {
+                sock.send(&wire).context("send duplicate SR VPN packet")?;
+            }
+            continue;
+        }
+        let packet_len = packet.len();
+        let (header, wire_len) = encode_uplink(
+            &mut packet,
+            packet_len,
+            xor_key,
+            aes_key,
+            sid,
+            token,
+            encryption,
+        )?;
+        sock.send(&protocol::data_pkt(&header, &packet[..wire_len]))
             .context("send VPN packet")?;
+        if duplicate {
+            let mut dup = header;
+            dup[0] = match header[0] {
+                protocol::PT_DATA => protocol::PT_DATA_DUP,
+                protocol::PT_DATA_ENC => protocol::PT_DATA_ENC_DUP,
+                other => other,
+            };
+            sock.send(&protocol::data_pkt(&dup, &packet[..wire_len]))
+                .context("send duplicate VPN packet")?;
+        }
     }
     Ok(())
 }

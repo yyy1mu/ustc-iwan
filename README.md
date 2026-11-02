@@ -18,6 +18,34 @@ SOCKS5/HTTP 模式由 smoltcp 在用户态生成完整的 TCP/IPv4 数据包，�
 | `iwan-client` | 手动指定服务器、用户名和密码，适合调试或自定义接入。 |
 | `iwan-server` | 自建兼容测试服务端，普通用户通常不需要。 |
 
+## v26.11.0 更新内容
+
+本版本将 client 与 server 的 VPN 协议层对齐 Panabit Android 2.4.3，不包含 APK 的 UI/应用层逻辑。
+
+### Client
+
+- `AUTH_VERIFY` 随机 nonce 发送与 OPEN_ACK/OPEN_REJ 回显校验
+- `T_ENCRYPT=0/1/2`，新增 AES-ECB 数据面
+- Android 风格密码 salt
+- SR profile A/B/C，支持 links 反序、内层/外层加密
+- SR 分片重组、SR monitor 和本地 SR ID
+- `DATA_DUP` / `DATA_ENC_DUP` 重复包发送
+- `T_DUPPKT` 自动重复
+- `PING` 子命令、MTU 范围校验、双 DNS 解析
+- TUN / OIDC / SOCKS / HTTP 断线重连
+- ECHO 心跳超时、默认路由变化检测
+- `--auto` 按 PING RTT 自动选择 serverlist 线路
+- Panabit 认证错误码映射
+
+### Server
+
+- Android 兼容的 OPEN/AUTH_VERIFY/AES 数据面
+- SR profile A/B/C、SR ECHO、SR 分片
+- IPv4/IPv6 分片重组
+- `DATA_DUP` / `DATA_ENC_DUP` 与 `T_DUPPKT`
+- MTU 校验
+- TUN 下行批量排空，修复高负载下约 100ms/包的队列延迟
+
 ## 目录
 
 - [快速开始](#快速开始)
@@ -280,6 +308,7 @@ Windows 上还可用 `setx IWAN_DEBUG 1` 设为用户级永久变量（新开终
 | `--connect` | 读取本地配置，选择线路并连接。 |
 | `--all` | 依次完成 `--fetch` → `--list` → `--connect`。 |
 | `--server <序号\|关键字>` | 非交互选择线路。 |
+| `--auto` | 对配置中的全部服务器发送 PING，选择 RTT 最低的线路。 |
 | `--socks` / `--http` | 启用用户态 SOCKS5 / HTTP 代理，二者互斥。 |
 | `--socks-listen <addr>` / `--http-listen <addr>` | 代理监听地址，默认 `127.0.0.1:1080` / `127.0.0.1:8080`。 |
 | `--proxy-mtu <mtu>` | 用户态内层 MTU，默认 `1380`。 |
@@ -289,7 +318,8 @@ Windows 上还可用 `setx IWAN_DEBUG 1` 设为用户级永久变量（新开终
 | `--tun <name>` | TUN 设备名（Linux），默认 `iwan0`。 |
 | `--tun-mtu <mtu>` | TUN 协商 MTU（Linux），默认 `1400`。 |
 | `--proxy-ip` / `--proxy-domain` / `--proxy-cidr` | TUN 路由规则（Linux）。 |
-| `--encrypt <0\|1\|2>` | 加密模式：0=None，1=XOR，2=AES，默认 `1`。 |
+| `--encrypt <0\|1\|2>` | 加密模式：0=None，1=XOR，2=AES-ECB，默认 `1`。 |
+| `--duplicate` | 每个上行数据包发送两次（`DATA_DUP` / `DATA_ENC_DUP`），用于弱网冗余。 |
 
 必须指定 `--fetch`、`--list`、`--connect`、`--all` 中的至少一个动作。
 
@@ -298,8 +328,9 @@ Windows 上还可用 `setx IWAN_DEBUG 1` 设为用户级永久变量（新开终
 `iwan-client` 不使用 OIDC，需要手动提供服务器、用户名和密码。
 
 ```bash
-# 测试连通性
+# 仅测试服务器连通性和 RTT
 ./iwan-client ping --server <SERVER_IP> --port 6001
+./iwan-client ping --server <SERVER_IP> --port 6001 --count 5 --interval-ms 500
 
 # 仅测试认证
 ./iwan-client auth --server <SERVER_IP> --port 6001 --user <USER> --pass '<PASSWORD>'
@@ -314,6 +345,16 @@ sudo ./iwan-client proxy --server <SERVER_IP> --port 6001 \
 ./iwan-client http  --server <SERVER_IP> --port 6001 \
   --user <USER> --pass '<PASSWORD>' --listen 127.0.0.1:8080
 ```
+
+`ping` 只验证服务器 UDP 端口和 PING 响应，不进行账号认证；`auth` 会发送带随机
+`AUTH_VERIFY` nonce 的 `OPEN`，并校验服务器回显的 nonce。
+
+| 参数 | 行为 |
+|------|------|
+| `--count <n>` | PING 次数，默认 1。 |
+| `--interval-ms <ms>` | PING 间隔，默认 1000ms。 |
+| `--bind <网卡\|IP>` | 绑定 PING UDP 套接字的出口网卡或源地址。 |
+| `--duplicate` | 每个上行数据包发送两次，服务端按普通 DATA 接收。 |
 
 ## 服务端
 

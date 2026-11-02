@@ -9,6 +9,7 @@ use std::fmt;
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, UdpSocket};
 
 use crate::core::dns::DnsResolver;
+use crate::core::sr::SrConfig;
 
 use engine::Engine;
 
@@ -38,9 +39,12 @@ pub struct ProxyConfig<'a> {
     pub gateway: Ipv4Addr,
     pub mtu: usize,
     pub xor_key: &'a [u8],
+    pub aes_key: &'a [u8],
     pub sid: u16,
     pub token: u32,
     pub encryption: u8,
+    pub sr: Option<SrConfig>,
+    pub duplicate: bool,
     pub dns: DnsResolver,
 }
 

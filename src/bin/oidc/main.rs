@@ -43,7 +43,21 @@ fn main() -> Result<()> {
         connect::print_servers(&config.servers);
     }
     if do_connect {
-        connect::connect_server(&cli, &config)?;
+        const MAX_ATTEMPTS: u32 = 5;
+        let mut attempt = 0u32;
+        loop {
+            match connect::connect_server(&cli, &config) {
+                Ok(()) => break,
+                Err(e) => {
+                    attempt += 1;
+                    if attempt >= MAX_ATTEMPTS {
+                        return Err(e);
+                    }
+                    eprintln!("connection ended: {e}; reconnecting ({attempt}/{MAX_ATTEMPTS})...");
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                }
+            }
+        }
     }
 
     Ok(())

@@ -1,6 +1,6 @@
 [package]
 name = "iwan"
-version = "26.9.1"
+version = "26.11.0"
 edition = "2021"
 
 [[bin]]
