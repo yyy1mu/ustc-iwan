@@ -45,7 +45,7 @@ jobs:
 
   deploy:
     needs: check
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && vars.WORKERS_DEPLOY == 'true'
     runs-on: ubuntu-24.04
     concurrency:
       group: iwan-workers-production
