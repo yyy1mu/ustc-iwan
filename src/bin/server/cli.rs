@@ -3,7 +3,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 
 /// iWAN SD-WAN server — authenticate clients and forward their tunneled traffic.
 #[derive(Parser)]
-#[command(name = "iwan-server", version)]
+#[command(name = "iwan-server", version = concat!("v", env!("CARGO_PKG_VERSION")))]
 pub struct Cli {
     #[arg(long, default_value = "6001")]
     pub port: u16,

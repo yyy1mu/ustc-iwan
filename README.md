@@ -26,13 +26,14 @@ SOCKS5/HTTP 模式由 smoltcp 在用户态生成完整的 TCP/IPv4 数据包，�
 | `iwan-client` | 手动指定服务器、用户名和密码，适合调试或自定义接入。 |
 | `iwan-server` | 自建兼容测试服务端，普通用户通常不需要。 |
 
-## v26.11.1-pre 更新内容
+## v26.11.1 更新内容
 
-v26.11.1-pre 完成 client 与 server 的 VPN 协议栈对齐 **Panabit Android 2.4.3**，重点覆盖认证、加密、SR、分片、重复包、心跳和重连能力。
+v26.11.1 完成 client 与 server 的 VPN 协议栈对齐 **Panabit Android 2.4.3**，重点覆盖认证、加密、SR、分片、重复包、心跳和重连能力。
 
 ### Client
 
 - `AUTH_VERIFY` 随机 nonce 发送与 OPEN_ACK/OPEN_REJ 回显校验
+- 旧服务端不识别 `AUTH_VERIFY`、ACK 不带隧道 IP 时自动回退 legacy OPEN
 - `T_ENCRYPT=0/1/2`，新增 AES-ECB 数据面
 - Android 风格密码 salt
 - SR profile A/B/C，支持 links 反序、内层/外层加密

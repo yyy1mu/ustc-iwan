@@ -4,7 +4,7 @@ use clap::Parser;
 ///
 /// Config is stored at ~/.config/iwan/servers.json with encrypted passwords intact.
 #[derive(Parser)]
-#[command(name = "iwan-client-oidc", version)]
+#[command(name = "iwan-client-oidc", version = concat!("v", env!("CARGO_PKG_VERSION")))]
 pub struct Cli {
     /// Output directory for the config file.
     #[arg(long, default_value = "~/.config/iwan")]

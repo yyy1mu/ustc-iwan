@@ -37,15 +37,16 @@ pub struct ClientSession {
 pub fn open(config: &SessionConfig<'_>) -> Result<ClientSession> {
     let ct = auth::get_ct(config.user, config.pass, config.ct_pass, config.salt)?;
     let nonce = auth::rand_u32();
-    let open = auth::build_open(
+    let mut open = auth::build_open(
         config.user,
         &ct,
         config.mtu,
         config.encrypt,
         config.pipe,
         config.srlink,
-        nonce,
+        Some(nonce),
     );
+    let mut sent_auth_verify = true;
     let sock = auth::udp_connect(config.server, config.port, 3000, config.bind)?;
 
     let mut result = None;
@@ -57,6 +58,22 @@ pub fn open(config: &SessionConfig<'_>) -> Result<ClientSession> {
         match sock.recv(&mut buf) {
             Ok(n) => match auth::parse_ack(&buf[..n], nonce) {
                 Ok(value) => {
+                    if sent_auth_verify && value.tun.is_empty() {
+                        eprintln!(
+                            "  Server returned no tunnel IP for AUTH_VERIFY; retrying legacy handshake..."
+                        );
+                        open = auth::build_open(
+                            config.user,
+                            &ct,
+                            config.mtu,
+                            config.encrypt,
+                            config.pipe,
+                            config.srlink,
+                            None,
+                        );
+                        sent_auth_verify = false;
+                        continue;
+                    }
                     result = Some(value);
                     break;
                 }

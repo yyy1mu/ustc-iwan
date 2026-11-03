@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 
 /// iWAN client — ping, authenticate, or run a SOCKS5/HTTP proxy.
 #[derive(Parser)]
-#[command(name = "iwan-client", version)]
+#[command(name = "iwan-client", version = concat!("v", env!("CARGO_PKG_VERSION")))]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,

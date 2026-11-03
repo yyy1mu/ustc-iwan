@@ -28,14 +28,16 @@ pub fn build_open(
     enc: u8,
     pipe: Option<(u16, u16)>,
     srlink: Option<u32>,
-    nonce: u32,
+    nonce: Option<u32>,
 ) -> Vec<u8> {
     let mut pl = Vec::new();
     pl.extend(protocol::tlv(protocol::T_MTU, &mtu.to_be_bytes()));
     pl.extend(protocol::tlv(protocol::T_USERNAME, user.as_bytes()));
     pl.extend(protocol::tlv(protocol::T_PASSWORD, ctp));
     pl.extend(protocol::tlv(protocol::T_ENCRYPT, &[enc]));
-    pl.extend(protocol::tlv(protocol::T_AUTH_VERIFY, &nonce.to_be_bytes()));
+    if let Some(nonce) = nonce {
+        pl.extend(protocol::tlv(protocol::T_AUTH_VERIFY, &nonce.to_be_bytes()));
+    }
     if let Some((pipeidx, pipeid)) = pipe {
         let packed = (pipeidx << 15) | pipeid;
         pl.extend(protocol::tlv(protocol::T_PIPE, &packed.to_be_bytes()));
@@ -75,7 +77,6 @@ pub fn parse_ack(buf: &[u8], expect_nonce: u32) -> Result<AuthResult> {
     if !protocol::verify_sig(buf) {
         anyhow::bail!("bad sig");
     }
-
     let mut tun = String::new();
     let mut gw = String::new();
     let mut dns = String::new();
@@ -325,4 +326,22 @@ pub fn get_ct(user: &str, pass: &str, ct_pass_hex: Option<&str>, salt: &str) -> 
     let mut ct = [0u8; 16];
     ct.copy_from_slice(&bytes[..16]);
     Ok(ct)
+}
+
+#[cfg(test)]
+mod auth_tests {
+    use super::*;
+
+    #[test]
+    fn build_open_makes_auth_verify_optional() {
+        let ct = [0u8; 16];
+        let with_verify = build_open("user", &ct, 1400, 1, None, None, Some(0x12345678));
+        let without_verify = build_open("user", &ct, 1400, 1, None, None, None);
+        assert!(protocol::parse_tlvs(&with_verify[24..])
+            .iter()
+            .any(|tlv| tlv.typ == protocol::TlvType::AuthVerify));
+        assert!(!protocol::parse_tlvs(&without_verify[24..])
+            .iter()
+            .any(|tlv| tlv.typ == protocol::TlvType::AuthVerify));
+    }
 }

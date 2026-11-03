@@ -374,7 +374,7 @@ mod tests {
         let aes_key = &key;
         let nonce = auth::rand_u32();
         let ct = auth::get_ct("test", "pass", None, "").unwrap();
-        let open = auth::build_open("test", &ct, 1400, 1, None, Some(1), nonce);
+        let open = auth::build_open("test", &ct, 1400, 1, None, Some(1), Some(nonce));
         let server_addr = server.local_addr().unwrap();
         client.send_to(&open, server_addr).unwrap();
         let mut packet = [0u8; 2048];
