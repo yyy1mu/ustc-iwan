@@ -201,6 +201,8 @@ def main():
             "port": s.get("serverPort", 0),
             "username": s.get("userName", ""),
             "password": password,
+            "salt": s.get("salt", ""),
+            #"mtu": s.get("mtu"),
         })
     print(json.dumps(servers, indent=2, ensure_ascii=False))
     with open(OUT_FILE, "w") as f:
